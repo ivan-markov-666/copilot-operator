@@ -6,9 +6,11 @@
  * Microsoft 365 sign-in — a file carrying that would sign anybody who has it in as the operator.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import type { Writable } from 'node:stream';
 import type { InstallLayout } from './layout.js';
-import type { ZipEntry } from '../util/zip.js';
+import { ZipWriter, type ZipEntry } from '../util/zip.js';
 
 /** Files of the data folder never exported, by name: this machine's key and the API's own bookkeeping. */
 const NEVER = new Set(['api-token', 'dev-pids.json', '.cop-lock.json', 'api.lock.json']);
@@ -49,17 +51,14 @@ export function exportSizes(layout: InstallLayout): { data: number; dataFiles: n
   return { data: data.reduce((n, f) => n + f.size, 0), dataFiles: data.length, runs: runs.reduce((n, f) => n + f.size, 0), runsFiles: runs.length };
 }
 
-/** The files of an export, named as they go in the archive (`data/…`, `runs/…`), and its manifest first. */
-export function exportEntries(layout: InstallLayout, opts: { runs: boolean; version: string; now?: Date }): ZipEntry[] {
+/** What an export holds: its files, named as they go in the archive (`data/…`, `runs/…`), and its manifest. */
+export type ExportPlan = { files: Array<{ name: string; path: string; mtime: Date }>; manifest: Record<string, unknown>; now: Date };
+
+export function exportPlan(layout: InstallLayout, opts: { runs: boolean; version: string; now?: Date }): ExportPlan {
   const now = opts.now ?? new Date();
-  const entries: ZipEntry[] = [];
-  const add = (root: string, under: string) => (f: Found): void => {
-    entries.push({ name: `${under}/${relative(root, f.path).replace(/\\/g, '/')}`, data: readFileSync(f.path), mtime: f.mtime });
-  };
+  const named = (root: string, under: string) => (f: Found) => ({ name: `${under}/${relative(root, f.path).replace(/\\/g, '/')}`, path: f.path, mtime: f.mtime });
   const data = dataFiles(layout);
-  data.forEach(add(layout.dataDir, 'data'));
   const runs = opts.runs ? filesUnder(layout.runsDir) : [];
-  runs.forEach(add(layout.runsDir, 'runs'));
   const manifest = {
     exportedBy: `copilot-operator ${opts.version}`,
     exportedAt: now.toISOString(),
@@ -74,7 +73,54 @@ export function exportEntries(layout: InstallLayout, opts: { runs: boolean; vers
       ...(opts.runs ? [] : [{ what: 'runs/', why: 'not asked for' }]),
     ],
   };
-  return [{ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), mtime: now }, ...entries];
+  return { files: [...data.map(named(layout.dataDir, 'data')), ...runs.map(named(layout.runsDir, 'runs'))], manifest, now };
+}
+
+/** The manifest as it goes in, with the files that could not be read named. */
+function manifestEntry(plan: ExportPlan, notRead: Array<{ what: string; why: string }>): ZipEntry {
+  const manifest = notRead.length > 0 ? { ...plan.manifest, notRead } : plan.manifest;
+  return { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), mtime: plan.now };
+}
+
+/** The files of an export, read now, and its manifest last: for a few small files. An export goes through `writeExport`. */
+export function exportEntries(layout: InstallLayout, opts: { runs: boolean; version: string; now?: Date }): ZipEntry[] {
+  const plan = exportPlan(layout, opts);
+  const entries: ZipEntry[] = [];
+  const notRead: Array<{ what: string; why: string }> = [];
+  for (const f of plan.files) {
+    try {
+      entries.push({ name: f.name, data: readFileSync(f.path), mtime: f.mtime });
+    } catch (e) {
+      notRead.push({ what: f.name, why: (e as Error).message });
+    }
+  }
+  return [...entries, manifestEntry(plan, notRead)];
+}
+
+/**
+ * An export written to the download as it goes (second bug hunt, 2026-11-19): one file read at a time, off the API's
+ * thread, the archive never whole in memory. A file that cannot be read — held by another program, gone since it was
+ * listed — is named in the manifest, which goes in last, and the rest go on: it failed the whole export, which the
+ * page's link then saved as a file of its own, the reason not shown.
+ */
+export async function writeExport(plan: ExportPlan, out: Writable): Promise<{ files: number; notRead: number }> {
+  const zip = new ZipWriter(out);
+  const notRead: Array<{ what: string; why: string }> = [];
+  let files = 0;
+  for (const f of plan.files) {
+    let data: Buffer;
+    try {
+      data = await readFile(f.path);
+    } catch (e) {
+      notRead.push({ what: f.name, why: (e as Error).message });
+      continue;
+    }
+    await zip.add({ name: f.name, data, mtime: f.mtime });
+    files += 1;
+  }
+  await zip.add(manifestEntry(plan, notRead));
+  await zip.finish();
+  return { files, notRead: notRead.length };
 }
 
 /** The export's file name: copilot-operator-export-20261023-1142.zip. */

@@ -160,9 +160,18 @@ console.log('\n--- Settings, and a chat message end to end ---');
     const renamed = await h.call<Project>('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref }] });
     t.check('a list saved without the box keeps it', renamed.others[0]?.readOnly, true);
     // A project that may be changed, inside one for reference only (bug hunt 2026-11-18): every change in it put back.
-    const around = await h.raw('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref, readOnly: true }, { name: 'everything', rootDir: h.base, readOnly: true }] });
-    t.truthy('the chat\'s project inside one for reference only: refused, saying why', around.status === 400 && /is inside everything .* which is for reference only/.test(JSON.stringify(around.body)), around);
-    t.check('and nothing saved', (await h.call<Project>('GET', '/project')).others.map((o) => o.name), ['the tests, renamed']);
+    const around = await h.raw('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref, readOnly: false }, { name: 'everything', rootDir: h.base, readOnly: true }] });
+    t.truthy('another project to work in, inside one for reference only: refused, saying why', around.status === 400 && /the tests, renamed .* is inside everything .* which is for reference only/.test(JSON.stringify(around.body)), around);
+    t.check('and nothing saved', (await h.call<Project>('GET', '/project')).others.map((o) => [o.name, o.readOnly]), [['the tests, renamed', true]]);
+    /*
+     * The chat's own folder inside one for reference only (second bug hunt, 2026-11-19): allowed, as Kerrigan's text
+     * says — every message there then only reads — and "Open a folder" can make it so; refused, every later save of the
+     * projects, a name or a level 2, was refused with it.
+     */
+    const chatsInside = await h.raw('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref, readOnly: true }, { name: 'everything', rootDir: h.base, readOnly: true }] });
+    const notesAfter = await h.raw('PUT', '/project', { level2: 'Notes of the chat.' });
+    t.check("the chat's own folder inside one for reference only: taken, and a save after it too", [chatsInside.status < 300, notesAfter.status < 300], [true, true]);
+    await h.call('PUT', '/project', { level2: '', others: [{ name: 'the tests, renamed', rootDir: ref, readOnly: true }] });
 
     const aBefore = bytes(join(ref, 'a.txt'));
     h.chat.script(

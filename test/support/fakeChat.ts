@@ -108,6 +108,10 @@ export class FakeCopilot {
   signInOnReturn = 0;
   /** While set, such a sign-in is not done until it settles: the operator has not signed in yet. */
   signInWait: Promise<void> | null = null;
+  /** What each wait for the sign-in was asked with (`ensureSignedIn`'s options). */
+  readonly signInOpts: Array<Record<string, unknown>> = [];
+  /** While set, the next window's first sign-in waits for it, as a page asking the operator to sign in: said, then done. */
+  signInAtStart: Promise<void> | null = null;
   /** The options every window was opened with: its waits, its locators. */
   readonly windowOptions: Array<{ signInTimeoutMs?: number }> = [];
   /** Conversations that no longer open, by their address or by their name: deleted in Copilot. */
@@ -350,10 +354,18 @@ class FakeChat implements ChatWindow {
     this.world.noticesCleared += 1;
   }
 
-  async ensureSignedIn(): Promise<void> {
+  async ensureSignedIn(_url?: string, opts: Record<string, unknown> = {}): Promise<void> {
     if (!this.live && !this.gone) throw new Error('ensureSignedIn before open');
     this.onChat = null;
     this.world.signIns += 1;
+    this.world.signInOpts.push(Object.fromEntries(Object.entries(opts).filter(([k]) => k !== 'signal')));
+    const wait = this.world.signInAtStart;
+    if (wait) {
+      this.world.signInAtStart = null;
+      this.opts.onEvent?.('sign-in-required', { url: 'https://login.microsoftonline.com/' });
+      await wait;
+      this.opts.onEvent?.('signed-in');
+    }
     if (this.live && this.world.closeOnSignIn > 0) {
       this.world.closeOnSignIn -= 1;
       this.closedByHand();

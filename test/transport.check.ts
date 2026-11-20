@@ -1117,6 +1117,49 @@ try {
     t.truthy("and the end names the box's locator, not only the sign-in", /The sign-in was not completed/.test(failed?.message ?? '') && /fix "Box to write in" in Settings/.test(failed?.message ?? '') && (failed?.message ?? '').includes('#no-such-box'), failed?.message);
   });
 
+  await section("the box found after all, once a slow sign-in is done: said found, so its red goes", async () => {
+    /*
+     * Found 2026-11-19 (second bug hunt): the box's locator, said to find nothing while the sign-in was waited for, kept
+     * its red field and its banner after the box came, the locator never at fault.
+     */
+    const f = await fixture('chat-late-box', '<p>blank</p>', { signInTimeoutMs: 30_000, chatLocators: { composer: '#late-box' } });
+    const held = f.transport as unknown as { firstLookMs: number; settleMs: number; otherPageMs: number; boxSuspectMs: number };
+    held.firstLookMs = 800;
+    held.settleMs = 300;
+    held.otherPageMs = 600;
+    held.boxSuspectMs = 1_000;
+    await f.page.route(/^https:\/\/(m365|copilot)\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      // No box until the operator is "in": it comes a few seconds later.
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><title>Copilot</title><main id="m"></main><script>setTimeout(() => { document.getElementById("m").innerHTML = \'<div id="late-box" contenteditable="true" style="min-width:200px;min-height:20px">x</div><button aria-label="Send">s</button>\'; }, 3000);</script>' });
+    });
+    const failed = await rejection(f.transport.ensureSignedIn('https://copilot.cloud.microsoft/chat'));
+    const order = f.events.filter((e) => e.event === 'locator-missing' || e.event === 'locator-found').map((e) => [e.event, e.detail?.key]);
+    t.check('said missing while it waited, then found: the wait goes on to the chat', [failed?.message ?? null, order], [null, [['locator-missing', 'composer'], ['locator-found', 'composer']]]);
+  });
+
+  await section("no box on Copilot's own chat page, for a reading that only looks: said at once, not waited on", async () => {
+    /*
+     * Found 2026-11-19 (second bug hunt): "Check the locators" and "Read the list from Copilot" waited the whole sign-in
+     * time, fifteen minutes by default, on a box their locator did not find, the operator at Settings told nothing.
+     */
+    const f = await fixture('chat-no-box-reading', '<p>blank</p>', { signInTimeoutMs: 60_000, chatLocators: { composer: '#no-such-box' } });
+    const held = f.transport as unknown as { firstLookMs: number; settleMs: number; otherPageMs: number; boxSuspectMs: number };
+    held.firstLookMs = 800;
+    held.settleMs = 300;
+    held.otherPageMs = 600;
+    held.boxSuspectMs = 1_000;
+    await f.page.route(/^https:\/\/(m365|copilot)\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><title>Copilot</title><div data-test-id="chat-input-wrapper"><span role="textbox" contenteditable="true">x</span><button aria-label="Send">s</button></div>' });
+    });
+    const started = Date.now();
+    const failed = await rejection(f.transport.ensureSignedIn('https://copilot.cloud.microsoft/chat', { boxNotWaited: true }));
+    const took = Date.now() - started;
+    t.check("said at once as the box's locator, stopping the reading", [failed?.name, (failed as { key?: string } | null)?.key, named(f.events, 'locator-missing').map((e) => [e.detail?.key, e.detail?.stopped])], ['LocatorMissing', 'composer', [['composer', true]]]);
+    t.truthy('within seconds, not the sign-in time', took < 15_000, `${took} ms`);
+  });
+
   await section("a locator that finds nothing: which one, the page's HTML for a chatbot, and a message never sent twice", async () => {
     /*
      * Operator, 2026-11-17: "a mechanism that detects which locator exactly the bot failed on … the bot saves the page's

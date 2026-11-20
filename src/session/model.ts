@@ -583,6 +583,22 @@ export type ParkedAnswer =
    */
   | { kind: 'released' };
 
+/**
+ * The approved plan a task works to: its own attempt's, else, carried on, the latest one approved in the conversation it
+ * carries on — back through the attempts it continues, to the one that began that conversation. Not one before it
+ * (second bug hunt, 2026-11-19): a plan approved before a retry in a fresh conversation was taken by a message carried
+ * on after that retry, and it went to the work on a plan its conversation never saw.
+ */
+export function approvedPlanOf(task: Pick<Task, 'plan' | 'continuing' | 'attempts'>): TaskPlan | undefined {
+  if (task.plan?.approved) return task.plan;
+  if (!task.continuing) return undefined;
+  for (const a of [...(task.attempts ?? [])].reverse()) {
+    if (a.plan?.approved) return a.plan;
+    if (!a.continuing || a.freshRetry) return undefined;
+  }
+  return undefined;
+}
+
 /** Whether a set-aside task's card is over — stopped, or let go of by the queue — so that "Continue" carries it on. */
 export function parkedOver(parked: { answer?: { kind: string } } | undefined): boolean {
   return !parked || parked.answer?.kind === 'stopped' || parked.answer?.kind === 'released';
@@ -902,6 +918,11 @@ export type TaskContinuation = {
    */
   /** `restored`: the folder was put back to the subtask's start first (a card the queue kept, 2026-11-18). */
   retrySubtask?: { n: number; fresh?: boolean; restored?: boolean };
+  /**
+   * Two chats, a card the queue kept answered with "Take it as failed" (second bug hunt, 2026-11-19): the subtask by its
+   * number, which the lead is told to decide without, and so not also that it was cut off, to give it again.
+   */
+  takenAsFailed?: { n: number };
 };
 
 /** How an attempt ended without the work being done: what is said to the chat that carries it on. */

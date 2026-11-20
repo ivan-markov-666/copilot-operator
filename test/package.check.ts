@@ -119,15 +119,23 @@ console.log("\n--- the bot's folder: moved out of the project once, chosen on th
   const elsewhere = join(base, 'D', 'bot');
   check('a folder of the operator\'s own is fine', homeRefusal(elsewhere, layout), null);
 
-  // Chosen, with a copy: everything but the pointer; nothing the new folder has is overwritten.
+  /*
+   * Chosen, with a copy: everything but the pointer. What the new folder had of it is put aside beside it, never
+   * overwritten and never used (second bug hunt, 2026-11-19: kept and used, "Back to the default" with a copy came back
+   * to the records the default had before the move, and the work since stayed behind).
+   */
   mkdirSync(join(layout.homeDir, 'edge-profile', 'Default'), { recursive: true });
   writeFileSync(join(layout.homeDir, 'edge-profile', 'Default', 'Cookies'), 'signed in', 'utf8');
+  mkdirSync(join(layout.homeDir, 'runs', 'r1'), { recursive: true });
   mkdirSync(join(elsewhere, 'runs'), { recursive: true });
   writeFileSync(join(elsewhere, 'runs', 'mine.txt'), 'theirs', 'utf8');
-  const result = chooseHome(layout, elsewhere, true, env);
-  check('choosing copies what the folder has', [result.home, result.copied.sort(), result.kept], [elsewhere, ['data', 'edge-profile'], ['runs']]);
+  writeFileSync(join(elsewhere, 'notes.txt'), 'the operator\'s own', 'utf8');
+  const result = chooseHome(layout, elsewhere, true, env, new Date(Date.UTC(2026, 10, 19, 9, 30, 5)));
+  const aside = `${elsewhere}.before-20261119-093005`;
+  check('choosing copies what the folder has, all of it', [result.home, result.copied.sort(), result.aside, result.asideDir], [elsewhere, ['data', 'edge-profile', 'runs'], ['runs'], aside]);
   check('the Edge profile goes too, so the sign-in stays', readFileSync(join(elsewhere, 'edge-profile', 'Default', 'Cookies'), 'utf8'), 'signed in');
-  check('what the new folder had is left as it was', [readFileSync(join(elsewhere, 'runs', 'mine.txt'), 'utf8'), existsSync(join(elsewhere, 'runs', 'r1'))], ['theirs', false]);
+  check('what the new folder had of it is put aside beside it, as it was; the copy in its place', [readFileSync(join(aside, 'runs', 'mine.txt'), 'utf8'), existsSync(join(elsewhere, 'runs', 'r1')), existsSync(join(elsewhere, 'runs', 'mine.txt'))], ['theirs', true, false]);
+  check('what is not the bot\'s is left where it is', readFileSync(join(elsewhere, 'notes.txt'), 'utf8'), 'the operator\'s own');
   check('neither the pointer nor the moved-from note is copied', [existsSync(join(elsewhere, HOME_CHOICE_FILE)), existsSync(join(elsewhere, 'moved-from.json'))], [false, false]);
   check('the choice is read at the next start', [chosenHome(env), installLayout(env, project, pkg).homeDir], [elsewhere, elsewhere]);
   check('the current folder is left as it was', existsSync(join(layout.dataDir, 'settings.json')), true);

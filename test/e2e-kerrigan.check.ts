@@ -346,6 +346,8 @@ await scenario('stopped while her chat works, then carried on: "same" goes on in
   t.check('carried on: "same" went to the chat she was directing, not refused', [r.started, done.status, second?.chat, second?.sessionId === chatId, done.kerrigan?.chats], [true, 'done', 'same', true, [chatId]]);
   t.check('what she sent is counted on from the attempt before', done.kerrigan?.sent, 2);
   t.truthy('she was told she was carried on', toldHer.length > 0 && !/No chat of yours is there yet/.test(JSON.stringify(done.kerrigan?.rounds ?? [])), toldHer.slice(0, 300));
+  // Told what is left of her allowance, not the whole of it again (second bug hunt, 2026-11-19).
+  t.truthy('told how many of her messages are left, the one sent before counted', /1 went out before it stopped, so 5 are left\./.test(toldHer), toldHer.slice(-600));
   t.truthy('the file written in the end', existsSync(join(h.repo, 'result.txt')) && readFileSync(join(h.repo, 'result.txt'), 'utf8').trim() === 'hello');
 });
 

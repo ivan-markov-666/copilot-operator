@@ -68,7 +68,7 @@ import type { HandoffCard, HandoffOutcome, KerriganOnCard, PendingApproval, Retr
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { isContinuable, withProblemAt } from '../session/model.js';
+import { approvedPlanOf, isContinuable, withProblemAt } from '../session/model.js';
 import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
@@ -792,9 +792,16 @@ export async function enterSessionConversation(
       const byName = await transport.openConversationByName(session.chat.name);
       if (!byName) {
         if (opts.closeOnFailure) await transport.close();
-        throw new Error(
-          `The session's conversation "${session.chat.name}" could not be reopened. ` +
-            'It may have been deleted in Copilot. Start a new session for a fresh conversation.',
+        /*
+         * A stop, as any conversation the window cannot be put back on (second bug hunt, 2026-11-19): a plain error ended
+         * the lead's message, or Kerrigan's, "failed" when the window went back to it from another conversation, telling
+         * the operator to start a new session, which the chat has none of. Continue tries it again.
+         */
+        throw new ChatLost(
+          session.chat.chatId,
+          'neither its address nor its name in the sidebar',
+          `The conversation "${session.chat.name}" could not be opened again, by its address or by its name in Copilot's sidebar: ` +
+            'it may have been deleted in Copilot. Nothing was sent to it. Carried on with "Continue", or sent again, it is tried again; a new chat starts a fresh conversation.',
         );
       }
     }
@@ -1261,13 +1268,6 @@ const CHAT_NOTE = [
 ].join('\n');
 
 /** Runs one task to completion inside an already-open transport. */
-/** The approved plan a task works to: its own attempt's, else, for a continuation, the latest one before it. */
-function approvedPlanOf(task: Task): TaskPlan | undefined {
-  if (task.plan?.approved) return task.plan;
-  if (!task.continuing) return undefined;
-  return [...(task.attempts ?? [])].reverse().find((a) => a.plan?.approved)?.plan;
-}
-
 export async function runTask(
   transport: ChatTransport,
   session: Session,

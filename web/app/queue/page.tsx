@@ -136,7 +136,8 @@ export default function QueuePage() {
     setBusy(true);
     setErr('');
     try {
-      setQueue(await api.setQueue(next));
+      // With the list it was made on: a task added or taken out since, in another tab, stays so (2026-11-19).
+      setQueue(await api.setQueue(next, items.map(asEdit)));
       return true;
     } catch (e) {
       setErr((e as Error).message);

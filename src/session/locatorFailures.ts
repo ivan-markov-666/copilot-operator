@@ -60,12 +60,13 @@ export class LocatorFailures {
     await this.change((all) => [failure, ...all.filter((f) => f.key !== failure.key)]);
   }
 
-  /** Closed by the operator. True when there was one. */
-  async dismiss(key: string): Promise<boolean> {
+  /** Closed by the operator, or found after all; with `locator`, only while it is the one kept. True when there was one. */
+  async dismiss(key: string, locator?: string): Promise<boolean> {
     let had = false;
+    const goes = (f: LocatorFailure): boolean => f.key === key && (locator === undefined || f.locator === locator);
     await this.change((all) => {
-      had = all.some((f) => f.key === key);
-      return all.filter((f) => f.key !== key);
+      had = all.some(goes);
+      return all.filter((f) => !goes(f));
     });
     return had;
   }

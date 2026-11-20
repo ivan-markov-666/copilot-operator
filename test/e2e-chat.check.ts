@@ -436,7 +436,9 @@ try {
   const missing = await h.raw('PUT', '/workspace/file', { path: 'not-there.txt', text: 'x' });
   writeFileSync(join(h.repo, 'bin.dat'), Buffer.from([1, 0, 2, 0]));
   const binary = await h.raw('PUT', '/workspace/file', { path: 'bin.dat', text: 'x' });
-  t.check('refused: a path out of the folder, git\'s own folder, a file not there, a binary file', [outside.status, inGit.status, missing.status, binary.status], [400, 400, 400, 400]);
+  // A file not there is 404 (second bug hunt, 2026-11-19): the editor tells it from a refusal, to offer saving it again.
+  t.check('refused: a path out of the folder, git\'s own folder, a file not there (404), a binary file', [outside.status, inGit.status, missing.status, binary.status], [400, 400, 404, 400]);
+  t.check('and the file not there is not made by a plain save', existsSync(join(h.repo, 'not-there.txt')), false);
   t.check('and nothing was made out of the folder', existsSync(join(h.repo, '..', 'outside.txt')), false);
 
   // Plan mode, chosen for a new conversation: the plan asked of the operator though commands run without asking.

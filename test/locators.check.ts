@@ -104,6 +104,35 @@ console.log('\n--- "Check the locators": through the API, a window opened and cl
     }, 10_000).catch(() => [] as Failure[]);
     t.check('Send, found now, lost its failure; Copy, not found, has one, as not stopping the work', after.map((x) => [x.key, x.stopped]), [['copy', false]]);
 
+    /*
+     * A sign-in on the way (second bug hunt, 2026-11-19): the check waited for it with nothing said, and a box its locator
+     * did not find was waited on as a sign-in, fifteen minutes. Said now, on the tab and at the button; a box not found
+     * is said at once (see the transport check), which the check and the reading of the models ask for.
+     */
+    let signedIn!: () => void;
+    h.chat.signInAtStart = new Promise<void>((r) => (signedIn = r));
+    const asked = h.chat.signInOpts.length;
+    const checking = h.call<{ results: unknown[] }>('POST', '/locators/check');
+    const waiting = await waitFor('the sign-in to be said', async () => ((await h.call<{ signIn?: boolean }>('GET', '/activity')).signIn ? true : null), 10_000).catch(() => false);
+    signedIn();
+    await checking;
+    t.check('while it waits, the activity says a sign-in; once in, no longer; the box not waited on', [waiting, (await h.call<{ signIn?: boolean }>('GET', '/activity')).signIn ?? false, h.chat.signInOpts[asked]?.boxNotWaited], [true, false, true]);
+    await h.call('POST', '/models/refresh');
+    t.check('the reading of the models does not wait on a box either', h.chat.signInOpts.at(-1)?.boxNotWaited, true);
+
+    /*
+     * Found after all (second bug hunt, 2026-11-19): the box said missing while a slow sign-in was waited for, then found,
+     * kept its red. Found now, its failure goes; one whose locator was changed since is not this one's to take away.
+     */
+    const found = (locator: string) => h.ops.bus.publish({ sessionId: 'found-check', type: 'browser:locator-found', level: 'info', message: 'found', data: { key: 'composer', locator } });
+    h.ops.recordLocatorFailure({ key: 'composer', locator: DefaultChatLocators.composer, why: 'while the sign-in was waited for', stopped: false });
+    await waitFor('the box kept', async () => ((await h.call<Failure[]>('GET', '/locators/failures')).some((x) => x.key === 'composer') ? true : null), 10_000).catch(() => undefined);
+    found('#another-box');
+    const stays = await waitFor('a moment', async () => (await h.call<Failure[]>('GET', '/locators/failures')).some((x) => x.key === 'composer'), 2_000).catch(() => false);
+    found(DefaultChatLocators.composer);
+    const gone = await waitFor('the box failure gone', async () => ((await h.call<Failure[]>('GET', '/locators/failures')).some((x) => x.key === 'composer') ? null : true), 10_000).catch(() => false);
+    t.check('found by another locator: kept; found by its own: gone', [stays, gone], [true, true]);
+
     // A step of the operator's own (2026-11-17): checked with the chat's, after them; one required not found is kept by its name.
     const settings = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
     const step = { id: 'mode', name: 'Chat mode', when: 'message', locator: '#mode-chat', action: 'click', must: true, waitSec: 2, off: false };

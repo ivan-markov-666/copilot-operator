@@ -267,7 +267,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
         `Continue task ${input.taskNumber}: ${title}, in this same conversation. ${whyItStopped(input.continuing)} ` +
         `Its plan was not approved yet, so the work does not go on from where it stopped: plan first, as below — look at ` +
         `what is there now, changing nothing — and send the plan for approval. Step numbering restarts at 1.\n\n` +
-        `${input.planNote}\n\n` +
+        // The plan-mode note once, with the runner's notes below (second bug hunt, 2026-11-19: it was sent twice).
         (instruction ? `${instructionSection(instruction.text)}\n\n` : '') +
         `${runnerBlock(input)}`.trimEnd();
       return { messages: [message], firstMessage: message };

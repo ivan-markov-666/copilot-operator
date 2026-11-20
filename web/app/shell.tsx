@@ -17,6 +17,7 @@ import { DoneLabel } from './doneLabel';
 import { StartFailureBanner } from './startFailure';
 import { LocatorFailureBanner } from './locatorFailure';
 import { Logo } from './logo';
+import { ErrorBoundary } from './errorBoundary';
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -27,7 +28,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <StartFailureBanner />
         <LocatorFailureBanner />
         <main id="main" className="wb-main">
-          {children}
+          <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>
         </main>
         {/* What waits for the operator, lit, the rest darkened (2026-10-27). */}
         <AwaitingSpotlight />
@@ -54,7 +55,9 @@ export function Shell({ children }: { children: ReactNode }) {
       <StartFailureBanner />
       {/* And a locator of the chat that found nothing, with the way to its field in Settings (2026-11-17). */}
       <LocatorFailureBanner />
-      <main id="main">{children}</main>
+      <main id="main">
+        <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>
+      </main>
       <AwaitingSpotlight />
       <SettingsTakenNotice />
       <DoneLabel />

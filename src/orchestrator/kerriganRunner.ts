@@ -138,7 +138,12 @@ function fenced(text: string): string {
 }
 
 /** The opening: the person's task, with what the runner tells her about it. */
-export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'continuing'>, n: number, facts: { maxSends: number; chat?: { name: string; title?: string } }, again: boolean): string {
+/**
+ * `sent`: the messages to chats a task carried on has sent already (second bug hunt, 2026-11-19), counted against the
+ * same allowance; told only the allowance, she sent one more after using them all and was refused.
+ */
+export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'continuing'>, n: number, facts: { maxSends: number; sent?: number; chat?: { name: string; title?: string } }, again: boolean): string {
+  const sent = facts.sent ?? 0;
   return [
     again
       ? 'A new task from the person, in this same conversation. Your contract and the facts you were given at the start still apply unchanged: the same format, the same rules. Restate this task in "understanding" in your first reply to it.'
@@ -161,7 +166,9 @@ export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'conti
           '',
         ]
       : []),
-    `You may send at most ${facts.maxSends} message(s) to chats for it.`,
+    sent > 0
+      ? `You may send at most ${facts.maxSends} message(s) to chats for it; ${sent} went out before it stopped, so ${Math.max(0, facts.maxSends - sent)} are left.`
+      : `You may send at most ${facts.maxSends} message(s) to chats for it.`,
     facts.chat
       ? `A chat of yours is there to carry on: "${facts.chat.name}"${facts.chat.title ? `, which worked last on "${facts.chat.title}"` : ''} — "same" sends to it.`
       : 'No chat of yours is there yet: your first message goes to a "new" one.',
@@ -820,7 +827,7 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
         s.contractSent = true;
       });
     }
-    const opening = kerriganTaskMessage(task, n || 1, { maxSends: maxSends(), ...(lastChat ? { chat: { name: lastChat.name.replace(/^chat: /, ''), ...(lastTitle ? { title: lastTitle } : {}) } } : {}) }, k.messages === 0 && !!session.chat);
+    const opening = kerriganTaskMessage(task, n || 1, { maxSends: maxSends(), ...(task.continuing && k.sent > 0 ? { sent: k.sent } : {}), ...(lastChat ? { chat: { name: lastChat.name.replace(/^chat: /, ''), ...(lastTitle ? { title: lastTitle } : {}) } } : {}) }, k.messages === 0 && !!session.chat);
     await record('THE TASK', opening);
     if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent to Kerrigan');
 

@@ -39,6 +39,7 @@ import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
 import { classifySubtaskEnd, describeAttempts, FAILURE_WORDS, retryMessage, retryPlan, sanitizedReason, sideEffectsOf, stepFacts, stepsOf, type RetryMode, type StepFacts } from './subtaskRetry.js';
 import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, redactsMessages, runTask, Sink, speakFor, staysOnItsChat, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
 import type { Acting, Actor, LeadRecord, LeadRound, RetryChoice, Session, SubtaskAttempt, Task, TaskLimit, TaskPlan } from '../session/model.js';
+import { approvedPlanOf } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
 /** The facts the assignment is sent with. */
@@ -162,10 +163,20 @@ function endedAs(status: TaskOutcome['status']): string {
   }
 }
 
+/**
+ * How many subtasks the lead has left, as it is told: never below none (second bug hunt, 2026-11-19). Settings lowered
+ * under what was given already told it "Subtasks left: -3 of 5".
+ */
+export function subtasksLeft(given: number, max: number): string {
+  return given > max ? `0 (${given} given; Settings now allow ${max})` : `${max - given} of ${max}`;
+}
+
 /** What the lead is told when it has no subtask left. */
-export function noSubtasksLeft(max: number): string {
+export function noSubtasksLeft(max: number, given = max): string {
   return [
-    `No subtask is left: all ${max} of this assignment have been used. Do not send "delegate" again.`,
+    given > max
+      ? `No subtask is left: ${given} have been given, and Settings now allow ${max}. Do not send "delegate" again.`
+      : `No subtask is left: all ${max} of this assignment have been used. Do not send "delegate" again.`,
     'Deliver what the work has found (status "done", with what is missing said plainly in "answer"), or stop (status "blocked", with what would let it go on in "needed").',
   ].join('\n');
 }
@@ -476,7 +487,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       files.length > 0 ? `Files it changed: ${files.join(', ')}.` : 'It changed no file.',
       ...((t?.deviations?.length ?? 0) > 0 ? ['', describeDeviations(t!.deviations!)] : []),
       '',
-      `Subtasks left: ${limit() - lead.subtasks} of ${limit()}.`,
+      `Subtasks left: ${subtasksLeft(lead.subtasks, limit())}.`,
       // Its own list, as it sent it last, to send again with the next subtask (2026-10-21).
       ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, limit())] : []),
       'Reply in the lead\'s format: the next subtask, the plan, a question for the operator, or the result.',
@@ -770,7 +781,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
      */
     const prior = carryingOn ? task.attempts?.at(-1)?.lead : undefined;
     const lastGiven = prior ? [...prior.rounds].reverse().find((r) => r.subtask)?.subtask : undefined;
-    const unreported = lastGiven && !lastGiven.report && !task.continuing?.retrySubtask ? { n: lastGiven.n, title: lastGiven.title } : undefined;
+    // Not one tried again first, nor one the operator took as failed on its card (2026-11-19): the lead is told that.
+    const unreported = lastGiven && !lastGiven.report && !task.continuing?.retrySubtask && task.continuing?.takenAsFailed?.n !== lastGiven.n ? { n: lastGiven.n, title: lastGiven.title } : undefined;
     const assignment = carryingOn ? continuationMessage(task, n || 1, facts, unreported) : assignmentMessage(task, n || 1, facts, !!session.contractSent);
     await setTask((t) => {
       t.firstMessage = session.contractSent ? assignment : `${contract}\n\n---\n\n${assignment}`;
@@ -846,7 +858,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
      * Whether a plan of this message was approved: in this attempt, or, carried on, in one before it (a plan approved on
      * a card the queue kept, or before a Stop) — what lets a subtask that changes the folder go to the worker.
      */
-    let planApproved = !!task.plan?.approved || (!!task.continuing && (task.attempts ?? []).some((a) => !!a.plan?.approved));
+    let planApproved = !!approvedPlanOf(task);
     const maxRounds = (): number => Math.max(1, cfg.limits.maxIterations);
 
     for (;;) {
@@ -886,8 +898,18 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
         ...(r.notes ? { notes: r.notes } : {}),
       };
       lead.rounds.push(round);
-      // Its list of subtasks, as this reply sends it (2026-10-21); the subtask given now is the running one.
-      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < limit() ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
+      /*
+       * Plans approved by the operator, and none approved yet (bug hunt 2026-11-18): only the contract asked the lead to
+       * wait, and a subtask that changes the folder went to the worker all the same. A survey that changes nothing may
+       * go before the plan, as the contract says; anything else waits for the plan's approval.
+       */
+      const beforePlan = r.status === 'delegate' && !!r.subtask && facts.planApproval && !planApproved && !r.subtask.readOnly;
+      /*
+       * Its list of subtasks, as this reply sends it (2026-10-21); the subtask given now is the running one. Only one that
+       * is given (second bug hunt, 2026-11-19): one held back for the plan was numbered as given, and the next one given
+       * took the same number.
+       */
+      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < limit() && !beforePlan ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
       const listed = nextLedger(lead.ledger, r.todo, round.at, giving);
       lead.ledger = listed.ledger;
       if (listed.change) {
@@ -907,15 +929,10 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       switch (r.status) {
         case 'delegate': {
           if (lead.subtasks >= limit()) {
-            markdown = await tell(noSubtasksLeft(limit()));
+            markdown = await tell(noSubtasksLeft(limit(), lead.subtasks));
             break;
           }
-          /*
-           * Plans approved by the operator, and none approved yet (bug hunt 2026-11-18): only the contract asked the lead to
-           * wait, and a subtask that changes the folder went to the worker all the same. A survey that changes nothing may
-           * go before the plan, as the contract says; anything else waits for the plan's approval.
-           */
-          if (facts.planApproval && !planApproved && !r.subtask!.readOnly) {
+          if (beforePlan) {
             sink.event('lead-plan-first', { round: round.n, title: r.subtask!.title }, `the lead gave a subtask that changes the folder before its plan was approved; told to send the plan first: ${r.subtask!.title}`, 'warn');
             markdown = await tell(PLAN_BEFORE_CHANGES);
             break;
@@ -952,7 +969,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             if (t.plan) t.plan.approved = approved;
           });
           planApproved = true;
-          markdown = await tell(leadPlanApproved(approved, limit() - lead.subtasks));
+          markdown = await tell(leadPlanApproved(approved, Math.max(0, limit() - lead.subtasks)));
           break;
         }
         case 'ask': {
@@ -970,7 +987,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             await saveLead();
             sink.event('question-agreed', { round: round.n, question: r.question, answer: agreed },
               `the lead asked: ${r.question} — answered as it recommends (Settings agree with what the bot proposes): ${agreed}`);
-            markdown = await tell(operatorAnswerMessage(agreed, limit() - lead.subtasks));
+            markdown = await tell(operatorAnswerMessage(agreed, Math.max(0, limit() - lead.subtasks)));
             break;
           }
           if (!deps.askQuestion) {
@@ -986,7 +1003,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           round.question.at = new Date().toISOString();
           await saveLead();
           sink.event('lead-question-answered', { round: round.n, ...(got.by ? { by: got.by } : {}) }, got.by === 'kerrigan' ? 'Kerrigan answered the lead' : 'the operator answered the lead');
-          markdown = await tell(operatorAnswerMessage(got.answer, limit() - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined, got.by === 'kerrigan'));
+          markdown = await tell(operatorAnswerMessage(got.answer, Math.max(0, limit() - lead.subtasks), got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined, got.by === 'kerrigan'));
           break;
         }
         case 'done': {

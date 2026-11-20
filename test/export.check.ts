@@ -9,11 +9,12 @@
  *   npm run check:export
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { createZip, crc32 } from '../src/util/zip.js';
-import { exportEntries, exportFileName, exportSizes } from '../src/config/exportHome.js';
+import { exportEntries, exportFileName, exportPlan, exportSizes, writeExport } from '../src/config/exportHome.js';
 import type { InstallLayout } from '../src/config/layout.js';
 import { startHarness, Tally } from './support/harness.js';
 
@@ -38,6 +39,17 @@ try {
   const opened = unzip(createZip([{ name: 'a/settings.json', data: Buffer.from(text, 'utf8') }, { name: 'b/tiny.bin', data: small }, { name: 'empty.txt', data: Buffer.alloc(0) }]), 'plain');
   t.check("Windows' own tar opens it, every file as it went in", [readFileSync(join(opened, 'a', 'settings.json'), 'utf8') === text, readFileSync(join(opened, 'b', 'tiny.bin')).equals(small), readFileSync(join(opened, 'empty.txt')).length], [true, true, 0]);
 
+  /*
+   * More files than the plain format counts (second bug hunt, 2026-11-19): every run's records are many small files, and
+   * past 65,535 the archive could not be written. ZIP64 then, which Windows' own tar reads.
+   */
+  const many = Array.from({ length: 70_000 }, (_, i) => ({ name: `runs/r${Math.floor(i / 1000)}/f${i}.txt`, data: Buffer.from(String(i)) }));
+  const bigFile = join(base, 'many.zip');
+  writeFileSync(bigFile, createZip(many));
+  const listed = spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-tf', bigFile], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const listedNames = listed.stdout.split(/\r?\n/).filter(Boolean);
+  t.check('70,000 files: written, and every one listed by tar', [listed.status, listedNames.length, listedNames.at(-1)], [0, 70_000, 'runs/r69/f69999.txt']);
+
   console.log('\n--- what goes in, and what never does ---');
   const home = join(base, 'home');
   const layout = { mode: 'package', homeDir: home, dataDir: join(home, 'data'), runsDir: join(home, 'runs') } as InstallLayout;
@@ -59,6 +71,22 @@ try {
   const out = unzip(createZip(withRuns), 'home-opened');
   t.check('opened, the files are as they were', [readFileSync(join(out, 'data', 'settings.json'), 'utf8'), readFileSync(join(out, 'runs', 'r1', 'task-log.txt'), 'utf8'), existsSync(join(out, 'data', 'api-token'))], ['{"copilot":{"defaultModel":"Think deeper"}}', 'the run', false]);
   t.check('its size, counted without the key', exportSizes(layout), { data: 43 + 11, dataFiles: 2, runs: 7, runsFiles: 1 });
+
+  /*
+   * Written as it goes (second bug hunt, 2026-11-19): the archive was built whole in memory first, and a file that could
+   * not be read failed the whole export, which the page's link saved as a file holding the error. Now one file at a time
+   * to the download, and one that cannot be read is named in the manifest, the rest going in.
+   */
+  const plan = exportPlan(layout, { runs: true, version: '9.9.9' });
+  unlinkSync(join(home, 'runs', 'r1', 'task-log.txt'));
+  const sink = new PassThrough({ highWaterMark: 16 });
+  const chunks: Buffer[] = [];
+  sink.on('data', (c: Buffer) => chunks.push(c));
+  const wrote = await writeExport(plan, sink);
+  const streamed = unzip(Buffer.concat(chunks), 'streamed');
+  const said = JSON.parse(readFileSync(join(streamed, 'manifest.json'), 'utf8')) as { notRead?: Array<{ what: string }> };
+  t.check('streamed: the files that could be read, and the one that could not named in the manifest', [wrote, readFileSync(join(streamed, 'data', 'settings.json'), 'utf8'), (said.notRead ?? []).map((x) => x.what)], [{ files: 2, notRead: 1 }, '{"copilot":{"defaultModel":"Think deeper"}}', ['runs/r1/task-log.txt']]);
+  writeFileSync(join(home, 'runs', 'r1', 'task-log.txt'), 'the run', 'utf8');
   t.check('named for when it was made', exportFileName(new Date(2026, 9, 23, 9, 5)), 'copilot-operator-export-20261023-0905.zip');
 
   console.log('\n--- through the API ---');

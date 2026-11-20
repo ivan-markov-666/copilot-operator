@@ -8,7 +8,7 @@
  * were kept until then — `.copilot-operator` in the folder it was started from — and none yet in its folder copies
  * them over once, and says so; the old folder is left for the operator to delete.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { defaultHome, HOME_CHOICE_FILE, type InstallLayout } from './layout.js';
 
@@ -75,8 +75,11 @@ export function homeRefusal(dir: string, layout: InstallLayout): string | null {
 
 /**
  * The operator's choice of folder, written where the next start reads it; `null` back to the default. With `copy`,
- * what is in the folder now — settings, conversations, logs, the Edge profile — is copied into the new one first,
- * leaving out what the new one has already (`kept`): nothing in it is overwritten. Takes effect when the bot starts
+ * what is in the folder now — settings, conversations, logs, the Edge profile — is copied into the new one first.
+ * What the new one has already of those is put aside beside it (`asideDir`, `<folder>.before-<when>`), never overwritten
+ * and never used (second bug hunt, 2026-11-19): it was kept and used, so "Back to the default" with a copy came back to
+ * the records the default had before the move, and the work since stayed behind, with only "Saved" said. Beside the
+ * folder, not in it, so an export of the folder never takes an old Edge profile along. Takes effect when the bot starts
  * again.
  */
 export function chooseHome(
@@ -84,18 +87,33 @@ export function chooseHome(
   dir: string | null,
   copy: boolean,
   env: NodeJS.ProcessEnv = process.env,
-): { home: string; copied: string[]; kept: string[] } {
+  now: Date = new Date(),
+): { home: string; copied: string[]; aside: string[]; asideDir?: string } {
   const target = dir ? resolve(dir.trim()) : defaultHome(env);
   const copied: string[] = [];
-  const kept: string[] = [];
+  const aside: string[] = [];
+  let asideDir: string | undefined;
   if (copy && !same(target, layout.homeDir) && existsSync(layout.homeDir)) {
     mkdirSync(target, { recursive: true });
-    for (const part of readdirSync(layout.homeDir)) {
-      if (part === HOME_CHOICE_FILE || part === MOVED_FILE) continue;
-      if (existsSync(join(target, part))) {
-        kept.push(part);
-        continue;
+    const parts = readdirSync(layout.homeDir).filter((part) => part !== HOME_CHOICE_FILE && part !== MOVED_FILE);
+    for (const part of parts) {
+      if (!existsSync(join(target, part))) continue;
+      if (!asideDir) {
+        const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+        asideDir = `${target.replace(/[\\/]+$/, '')}.before-${stamp}`;
+        mkdirSync(asideDir, { recursive: true });
       }
+      try {
+        renameSync(join(target, part), join(asideDir, part));
+      } catch (e) {
+        throw new Error(
+          `"${part}" in ${target} could not be put aside, to copy the bot's own in its place (${(e as Error).message}). ` +
+            `${aside.length > 0 ? `Put aside already, in ${asideDir}: ${aside.join(', ')}. ` : ''}Nothing was copied; the folder is not chosen.`,
+        );
+      }
+      aside.push(part);
+    }
+    for (const part of parts) {
       cpSync(join(layout.homeDir, part), join(target, part), { recursive: true, force: false, errorOnExist: false });
       copied.push(part);
     }
@@ -105,5 +123,5 @@ export function chooseHome(
   const pointer = join(pointerDir, HOME_CHOICE_FILE);
   if (same(target, pointerDir)) rmSync(pointer, { force: true });
   else writeFileSync(pointer, JSON.stringify({ home: target }, null, 2), 'utf8');
-  return { home: target, copied, kept };
+  return { home: target, copied, aside, ...(asideDir ? { asideDir } : {}) };
 }

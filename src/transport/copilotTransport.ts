@@ -1484,7 +1484,13 @@ Current URL: ${url}`);
    * Opens the chat and, if the tenant has signed us out, waits for the human. The bot never
    * types credentials; it only waits for the composer to appear.
    */
-  async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal; stepsLookOnly?: boolean } = {}): Promise<void> {
+  /**
+   * `boxNotWaited`: for a reading that only looks — the models, "Check the locators" — a box not found on Copilot's own
+   * chat page, no sign-in page in sight, is said at once as the box's locator, not waited on for the whole sign-in time
+   * (second bug hunt, 2026-11-19: the operator, at Settings, waited fifteen minutes with nothing said). A sign-in page is
+   * still waited on.
+   */
+  async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal; stepsLookOnly?: boolean; boxNotWaited?: boolean } = {}): Promise<void> {
     // A box locator saved in Settings that cannot be used: said once, before the box is looked for with the default.
     for (const problem of this.chatLocatorProblems.splice(0)) this.emit('chat-locator-not-used', { problem });
     // Copilot's home page, where no conversation is expected until the run enters one.
@@ -1512,8 +1518,14 @@ Current URL: ${url}`);
        */
       const firstLook = Math.min(this.boxSuspectMs, this.opts.signInTimeoutMs);
       const soon = await this.composerWithin(firstLook, opts.signal, stoppedHere);
+      if (!soon && opts.boxNotWaited && isWorkChatAddress(this.p.url())) {
+        this.warned.add('composer');
+        throw await this.locatorMissing('composer', `on ${whereIs(this.p.url())}, Copilot's own chat page and not a sign-in page, for ${Math.round(firstLook / 1000)} s`);
+      }
+      let suspected = false;
       if (!soon && isWorkChatAddress(this.p.url()) && !this.warned.has('composer')) {
         this.warned.add('composer');
+        suspected = true;
         await this.locatorMissing('composer', `on ${whereIs(this.p.url())}, Copilot's own chat page and not a sign-in page, for ${Math.round(firstLook / 1000)} s: if you are signed in, the box's locator is the one to fix (the bot goes on waiting for a sign-in meanwhile)`, { stopped: false }).catch(() => undefined);
       }
       if (!soon && !(await this.composerWithin(Math.max(1, this.opts.signInTimeoutMs - firstLook), opts.signal, stoppedHere))) {
@@ -1524,6 +1536,14 @@ Current URL: ${url}`);
               ? ` If you were signed in, the box to write in was not found on Copilot's chat page: fix "Box to write in" in Settings → "The chat's locators" (its notice has the file for a chatbot). In force: ${this.chatLocators.composer}`
               : ''),
         );
+      }
+      /*
+       * Found after all, once the sign-in was done (second bug hunt, 2026-11-19): the box's locator was not at fault, and
+       * the red field and the banner it had been given stayed, saying so.
+       */
+      if (suspected) {
+        this.warned.delete('composer');
+        this.emit('locator-found', { key: 'composer', locator: this.chatLocators.composer });
       }
       this.emit('signed-in');
       // A sign-in may come back to Copilot's home page rather than to its chat.

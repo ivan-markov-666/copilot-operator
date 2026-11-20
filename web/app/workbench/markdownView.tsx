@@ -155,10 +155,22 @@ export function slugOf(text: string): string {
 
 type Ctx = { dir: string; onOpenFile: (path: string) => void; t: ReturnType<typeof useT>['t'] };
 
+/**
+ * A link's path with its %-escapes read, or as it is written when they are not escapes: "50%.md" is a file of that
+ * name, and decodeURI throwing on it took the whole page down (second bug hunt, 2026-11-19).
+ */
+function decodedOr(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
+}
+
 /** A path of the folder from a link or a picture of the file at `dir`, or null when it leaves the folder or is not one. */
 function inFolder(dir: string, target: string): string | null {
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('//')) return null;
-  const clean = decodeURI(target.split('#')[0]!.split('?')[0]!);
+  const clean = decodedOr(target.split('#')[0]!.split('?')[0]!);
   const parts = (clean.startsWith('/') ? clean.slice(1) : `${dir}${dir ? '/' : ''}${clean}`).split('/');
   const out: string[] = [];
   for (const p of parts) {

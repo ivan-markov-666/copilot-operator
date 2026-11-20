@@ -487,7 +487,7 @@ await scenario('conversation re-entry: found again by name when moved, and a cle
   const added = await h.call<{ id: string }>('POST', `/sessions/${s!.id}/tasks`, { title: 'third-in-chat', prompt: 'A third task, for a conversation that no longer exists at all.' });
   const third = await h.run(s!.id);
   t.check('nothing was sent', h.chat.sent.length, sent);
-  t.truthy('the run says the conversation could not be reopened', (await eventsOf(h, s!.id)).some((e) => /could not be reopened/.test(e.message ?? '')), '');
+  t.truthy('the run says the conversation could not be reopened', (await eventsOf(h, s!.id)).some((e) => /could not be opened again/.test(e.message ?? '')), '');
   t.check('the task stays queued', third.tasks.find((x) => x.id === added.id)?.status, 'queued');
   t.check('no conversation was made in its place', h.chat.conversations.size, size);
 });

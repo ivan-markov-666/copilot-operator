@@ -12,7 +12,7 @@ import type { Response } from 'express';
 import { OperatorService, type SettingsSaved } from './operator.service.js';
 import { SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
-import { CHANGED_ON_DISK } from '../session/workspace.js';
+import { CHANGED_ON_DISK, GONE_FROM_DISK } from '../session/workspace.js';
 import { join } from 'node:path';
 import { DefaultChatLocators, DefaultPickerLocators, type ChatLocators, type PickerLocators } from '../transport/locators.js';
 import { platformTools } from '../exec/platforms.js';
@@ -295,14 +295,17 @@ export class OperatorController {
 
   /** Everything the bot has kept, as a .zip: `data/`, and `runs/` with `?runs=1`. See `config/exportHome.ts`. */
   @Get('home/export')
-  exportHome(@Query('runs') runs: string | undefined, @Res() res: Response): void {
+  async exportHome(@Query('runs') runs: string | undefined, @Res() res: Response): Promise<void> {
     try {
-      const { fileName, content } = this.ops.exportHome(runs === '1' || runs === 'true');
+      const { fileName, write } = this.ops.exportHome(runs === '1' || runs === 'true');
       res.type('application/zip');
       res.setHeader('content-disposition', contentDisposition(fileName));
-      res.send(content);
+      // Sent as it is written (2026-11-19), so its length is not known beforehand.
+      await write(res);
+      res.end();
     } catch (e) {
-      failText(res, e);
+      if (!res.headersSent) failText(res, e);
+      else res.destroy(e as Error);
     }
   }
 
@@ -382,7 +385,11 @@ export class OperatorController {
   @Get('workspace/file')
   workspaceFile(@Query('path') path?: string, @Query('dir') dir?: string): Promise<unknown> {
     if (!path) throw new BadRequestException('path is required');
-    return this.ops.workspaceFile(path, dir || undefined).catch(fail);
+    return this.ops.workspaceFile(path, dir || undefined).catch((e: unknown) => {
+      // Not there: 404, so the editor can tell it from a refusal (2026-11-19).
+      if ((e as { code?: string }).code === GONE_FROM_DISK) throw new NotFoundException((e as Error).message);
+      return fail(e);
+    });
   }
 
   /**
@@ -390,13 +397,14 @@ export class OperatorController {
    * is refused with 409, so the page can offer to read it again or to save over it (by sending no `base`).
    */
   @Put('workspace/file')
-  async saveWorkspaceFile(@Body() body: { path?: unknown; text?: unknown; base?: unknown; dir?: unknown } = {}): Promise<unknown> {
+  async saveWorkspaceFile(@Body() body: { path?: unknown; text?: unknown; base?: unknown; dir?: unknown; again?: unknown } = {}): Promise<unknown> {
     if (typeof body?.path !== 'string' || !body.path) throw new BadRequestException('path is required');
     if (typeof body.text !== 'string') throw new BadRequestException('text is required');
     try {
-      return await this.ops.saveWorkspaceFile(body.path, body.text, typeof body.base === 'string' && body.base ? body.base : undefined, typeof body.dir === 'string' && body.dir ? body.dir : undefined);
+      return await this.ops.saveWorkspaceFile(body.path, body.text, typeof body.base === 'string' && body.base ? body.base : undefined, typeof body.dir === 'string' && body.dir ? body.dir : undefined, body.again === true);
     } catch (e) {
       if ((e as { code?: string }).code === CHANGED_ON_DISK) throw new ConflictException((e as Error).message);
+      if ((e as { code?: string }).code === GONE_FROM_DISK) throw new NotFoundException((e as Error).message);
       fail(e);
     }
   }
@@ -550,8 +558,8 @@ export class OperatorController {
 
   /** The list as the page edits it: added, changed, moved, taken out, put back to wait. */
   @Put('queue')
-  setQueue(@Body() body: { items?: unknown } = {}): Promise<unknown> {
-    return this.ops.setQueue(body?.items).catch(fail);
+  setQueue(@Body() body: { items?: unknown; seen?: unknown } = {}): Promise<unknown> {
+    return this.ops.setQueue(body?.items, body?.seen).catch(fail);
   }
 
   @Post('queue/run')

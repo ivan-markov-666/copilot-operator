@@ -3637,9 +3637,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Change…',
             bg: 'Смени…',
             doesEn:
-              'Opens a field for another folder (and the machine\'s folder dialog), with a checkbox to copy what is there now — settings, conversations, logs, the Edge profile — and the button that uses it. Nothing in the new folder is overwritten; it takes effect when the bot is started again. Not offered for a clone or when COP_HOME sets the folder, and refused while work is going on.',
+              'Opens a field for another folder (and the machine\'s folder dialog), with a checkbox to copy what is there now — settings, conversations, logs, the Edge profile — and the button that uses it. What the new folder has already is put aside beside it (<folder>.before-<when>), not used; it takes effect when the bot is started again. Not offered for a clone or when COP_HOME sets the folder, and refused while work is going on.',
             doesBg:
-              'Отваря поле за друга папка (и прозореца за избор на папка), с отметка да се копира каквото има сега — настройки, разговори, логове, профилът на Edge — и бутона, който я ползва. Нищо в новата папка не се презаписва; важи, когато ботът се пусне отново. Не се предлага за клонинг или когато COP_HOME задава папката, и се отказва, докато върви работа.',
+              'Отваря поле за друга папка (и прозореца за избор на папка), с отметка да се копира каквото има сега — настройки, разговори, логове, профилът на Edge — и бутона, който я ползва. Каквото новата папка вече има, отива встрани до нея (<папка>.before-<кога>) и не се ползва; важи, когато ботът се пусне отново. Не се предлага за клонинг или когато COP_HOME задава папката, и се отказва, докато върви работа.',
           },
           {
             key: 'sys.homeReset',

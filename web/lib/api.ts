@@ -1507,7 +1507,9 @@ export const api = {
     call<NewBranchResult>('/workspace/new-branch', { method: 'POST', body: JSON.stringify({ name, carry, fingerprint, ...(message?.trim() ? { message } : {}) }) }, { timeoutMs: null }),
   /** The queue of tasks (2026-10-24): read, edited as a whole list, run, stopped. */
   queue: () => call<Queue>('/queue'),
-  setQueue: (items: Array<Omit<QueueItem, 'status'> & { status?: QueueItem['status'] }>) => call<Queue>('/queue', { method: 'PUT', body: JSON.stringify({ items }) }),
+  /** `seen`: the list the page had read, so an edit made on it drops nothing changed since (second bug hunt, 2026-11-19). */
+  setQueue: (items: Array<Omit<QueueItem, 'status'> & { status?: QueueItem['status'] }>, seen?: Array<Omit<QueueItem, 'status'>>) =>
+    call<Queue>('/queue', { method: 'PUT', body: JSON.stringify(seen ? { items, seen } : { items }) }),
   runQueue: () => call<Queue>('/queue/run', { method: 'POST', body: '{}' }),
   stopQueue: () => call<Queue>('/queue/stop', { method: 'POST', body: '{}' }),
   /** How long a task may wait for the operator before the queue sets it aside and goes on (2026-10-26). */
@@ -1525,8 +1527,9 @@ export const api = {
    * The editor's text over a file of the folder, over `base`, the version it was opened at (409 when it changed since);
    * `dir`, the folder it was opened in: refused when another is open now, so one folder's edit never lands in another's.
    */
-  saveWorkspaceFile: (path: string, text: string, base?: string, dir?: string) =>
-    call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}), ...(dir ? { dir } : {}) }) }),
+  /** `again`: a file deleted or renamed under the editor, saved where it was (2026-11-19). */
+  saveWorkspaceFile: (path: string, text: string, base?: string, dir?: string, again?: boolean) =>
+    call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}), ...(dir ? { dir } : {}), ...(again ? { again: true } : {}) }) }),
   /** The open folder's git: what changed, staged and not, and the branch's commits. Read-only. */
   workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
   /** Everything the branch changed against `base` (one of the branches it lists), as a pull request shows it. */
@@ -1606,10 +1609,10 @@ export const api = {
   openProjectFolder: (dir: string) => call<unknown>('/workspace/open', { method: 'POST', body: JSON.stringify({ dir }) }),
   /**
    * The bot's folder from its next start: `dir`, or null for the default; `copy` copies what is in the folder now
-   * (`kept` names what the new folder had already, left as it was).
+   * (`aside`: what the new folder had already, put aside in `asideDir` beside it, not used).
    */
   setHome: (dir: string | null, copy: boolean) =>
-    call<{ home: string; copied: string[]; kept: string[]; restart: true }>('/home', { method: 'PUT', body: JSON.stringify({ dir, copy }) }),
+    call<{ home: string; copied: string[]; aside: string[]; asideDir?: string; restart: true }>('/home', { method: 'PUT', body: JSON.stringify({ dir, copy }) }),
 
   /** Is anything running right now? Answered from memory, so polling it is fine. */
   activity: () => call<Activity>('/activity'),

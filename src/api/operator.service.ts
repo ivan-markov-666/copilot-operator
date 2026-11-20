@@ -21,7 +21,7 @@ import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, readStoreJson, StoreFileUnusable, writeFileAtomically } from '../session/store.js';
-import { checkItems, emptyQueue, holdsChat, itemTitle, mergeItems, nextStep, parkAfterMs, parkedAnswerFrom, skippedBecause, statusOfTask, waitsByHand, MAX_PARK_AFTER_SEC, PARKED_WORDS, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
+import { carriesOn, checkItems, emptyQueue, holdsChat, itemTitle, mergeItems, nextStep, rebaseEdit, parkAfterMs, parkedAnswerFrom, skippedBecause, statusOfTask, waitsByHand, MAX_PARK_AFTER_SEC, PARKED_WORDS, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
 import { branchStart, madeFromRemote, makeQueueBranch, refreshQueueBranch } from '../queue/queueBranch.js';
 import { EventBus } from '../session/events.js';
 import type {
@@ -111,6 +111,13 @@ const CARRIES_ON_AFTER = (what: string): string => `${what}; it carries on from 
 
 /** A card answered after it went: by Kerrigan, another tab, or its work having ended (2026-11-18). */
 export const CARD_GONE = 'That card is not waiting any more: it was answered, or its work ended.';
+/** A card pressed as the queue sets its task aside (second bug hunt, 2026-11-19). */
+/**
+ * A set-aside task whose chat went on past it (second bug hunt, 2026-11-19): a message written there since. Answered, the
+ * older message ran again after the newer one, in the same conversation, where "Continue" carries on only the last.
+ */
+export const PARKED_PASSED = 'The conversation has gone on past this task in its chat (a message was written there since), so its answer cannot carry it on: Stop it here, and say what it still needs in a new message in its chat.';
+export const SET_ASIDE_NOW = "The queue has just set this task aside, as it waited for you: answer it on the queue's page, where it waits now.";
 /** "Run this and the rest" where the run may not go on unasked: said, and the card kept (2026-11-18). */
 /** How long a task of the queue waits for a sign-in Copilot asks for: as long as it takes, a week (2026-11-19). */
 export const QUEUE_SIGN_IN_WAIT_SEC = 7 * 24 * 3600;
@@ -160,8 +167,8 @@ import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode
 import { leadPlanApproved, leadPlanRevise } from '../orchestrator/leadRunner.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
-import { exportEntries, exportFileName as homeExportName, exportSizes } from '../config/exportHome.js';
-import { createZip } from '../util/zip.js';
+import { exportFileName as homeExportName, exportPlan, exportSizes, writeExport } from '../config/exportHome.js';
+import type { Writable } from 'node:stream';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
@@ -531,10 +538,13 @@ export class OperatorService {
    * and "Sign in to Copilot" points to that window rather than refusing because of it.
    */
   private readonly signInAsked = new Map<string, string>();
+  /** A reading of Copilot's page — the models, "Check the locators" — waits for the operator to sign in (2026-11-19). */
+  private readingSignIn = false;
   private readonly followsActing = this.bus.subscribe('*', (e) => {
     if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
     // A chat locator that found nothing (2026-11-17): kept for the banner and Settings.
     else if (e.type === 'browser:locator-missing' && e.data) this.recordLocatorFailure(e.data);
+    else if (e.type === 'browser:locator-found' && e.data) this.locatorFound(e.data);
     else if (e.type === 'browser:sign-in-required' || e.type === 'browser:verification-required') {
       // The Copilot window waits for the operator to sign in, or to show a person is there: not counted (2026-10-29).
       this.holdOf(e.sessionId)?.waitFor(`${e.type}:${e.sessionId}`);
@@ -1233,6 +1243,15 @@ export class OperatorService {
    * "a mechanism that detects which locator exactly the bot failed on"): kept as the last one for that locator, for the
    * banner on every page and the field in red in Settings.
    */
+  /**
+   * A locator said to find nothing, found after all (second bug hunt, 2026-11-19: the box, once a slow sign-in was done):
+   * its failure goes — the banner, the red field — unless its locator was changed in Settings since.
+   */
+  private locatorFound(detail: Record<string, unknown>): void {
+    if (typeof detail.key !== 'string' || typeof detail.locator !== 'string') return;
+    void this.locatorFailures.dismiss(detail.key, detail.locator).catch(() => undefined);
+  }
+
   recordLocatorFailure(detail: Record<string, unknown>): void {
     const key = detail.key;
     if (typeof key !== 'string' || !((CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || isStepKey(key)) || typeof detail.locator !== 'string') return;
@@ -1350,9 +1369,11 @@ export class OperatorService {
    * Everything the bot has kept, as one .zip (operator, 2026-10-23): `data/` — the key and the Edge profile left out,
    * the manifest says why — and `runs/` when asked for.
    */
-  exportHome(runs: boolean): { fileName: string; content: Buffer } {
+  /** Written to the download as it goes (2026-11-19): see `writeExport`. Its name first, for the download's header. */
+  exportHome(runs: boolean): { fileName: string; write: (out: Writable) => Promise<unknown> } {
     const now = new Date();
-    return { fileName: homeExportName(now), content: createZip(exportEntries(this.layout, { runs, version: botVersion(), now })) };
+    const plan = exportPlan(this.layout, { runs, version: botVersion(), now });
+    return { fileName: homeExportName(now), write: (out) => writeExport(plan, out) };
   }
 
   async terminalReport(): Promise<{ fileName: string; content: string }> {
@@ -1707,7 +1728,7 @@ export class OperatorService {
       // Git asks for a password in its own window, and the work waits for it (2026-10-26).
       ...(this.passwordAsked.size > 0 ? { password: true } : {}),
       // Copilot's window waits for the operator to sign in (2026-11-19): the work goes on by itself once signed in.
-      ...(this.signInAsked.size > 0 && this.running.size > 0 ? { signIn: true } : {}),
+      ...((this.signInAsked.size > 0 && this.running.size > 0) || this.readingSignIn ? { signIn: true } : {}),
       // The queue still has its turn going, between one of its tasks and the next (2026-11-03): the work is not over.
       ...(this.queueLoop ? { queue: true } : {}),
       // Tasks of the queue set aside, waiting for the operator's answer on their cards (2026-11-19): the work is not over.
@@ -1928,11 +1949,11 @@ export class OperatorService {
   }
 
   /** The editor's text saved over a file of the open folder, over the version it was made on (see `saveWorkspaceFile`). */
-  async saveWorkspaceFile(path: string, text: string, base?: string, dir?: string): Promise<{ path: string; version: string; size: number }> {
+  async saveWorkspaceFile(path: string, text: string, base?: string, dir?: string, again = false): Promise<{ path: string; version: string; size: number }> {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
     this.sameOpenFolder(ws.dir, dir);
-    const saved = await saveWorkspaceFile(ws.dir, path, text, base);
+    const saved = await saveWorkspaceFile(ws.dir, path, text, base, again);
     console.log(`[editor] saved ${saved.path} (${saved.size} bytes)`);
     return saved;
   }
@@ -2174,10 +2195,20 @@ export class OperatorService {
   private queueTurn: Promise<unknown> = Promise.resolve();
   private queueLoop: Promise<void> | null = null;
   private queueRecovered = false;
+  /** The recovery under way, so two calls at once do it once; let go when it could not be written, to be tried again. */
+  private queueRecovering: Promise<void> | null = null;
+  /** The ending of the queue's task at work, until it is written: written again when the queue's loop ends (2026-11-19). */
+  private queueEnding: { id: string; ended: Partial<QueueItem> } | null = null;
   /** The program is closing: the queue's loop stops where it is. */
   private queueClosing = false;
   /** The session of the queue's task at work now (2026-10-26): where a wait for the operator is timed, to park it. */
   private readonly queueAtWork = new Set<string>();
+  /**
+   * Cards whose task the queue is setting aside now (second bug hunt, 2026-11-19): a press on one is refused, and said
+   * where to answer. Taken as the setting aside went on, the answer was lost: the task stopped and was set aside all the
+   * same, and asked for it again.
+   */
+  private readonly parking = new Set<string>();
   /** The timers of the waits of the queue's task at work: a card, by its id; a password window, by `pw:` and the session. */
   private readonly parkTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Commands the operator approved on a parked task's card, run without asking when its chat sends them again. */
@@ -2279,7 +2310,23 @@ export class OperatorService {
    */
   private async recoverQueue(): Promise<void> {
     if (this.queueRecovered) return;
-    this.queueRecovered = true;
+    /*
+     * Marked done once it has been written (second bug hunt, 2026-11-19): marked before, a write that failed once — the
+     * file held a moment by a virus scanner — left a task "running" until the program was started again.
+     */
+    this.queueRecovering ??= this.recoverQueueOnce().then(
+      () => {
+        this.queueRecovered = true;
+      },
+      (e: unknown) => {
+        this.queueRecovering = null;
+        throw e;
+      },
+    );
+    await this.queueRecovering;
+  }
+
+  private async recoverQueueOnce(): Promise<void> {
     const q = await this.readQueue();
     /*
      * The cards of set-aside tasks the queue does not hold any more (2026-11-19) — taken out, run again, the queue's file
@@ -2350,11 +2397,17 @@ export class OperatorService {
     return { ...q, busy };
   }
 
-  /** The list as the page edits it: added, changed, moved, taken out, put back to wait ("Run again"). */
-  async setQueue(items: unknown): Promise<Queue> {
+  /**
+   * The list as the page edits it: added, changed, moved, taken out, put back to wait ("Run again"). `seen` is the list
+   * the page had read: the edit is put onto the queue as it is now (`rebaseEdit`), so a page that read it before a change
+   * — a second tab — drops no task added since and puts back none taken out (second bug hunt, 2026-11-19).
+   */
+  async setQueue(items: unknown, seen?: unknown): Promise<Queue> {
     await this.recoverQueue();
     const checked = checkItems(items, MAX_INSTRUCTION_CHARS);
     if ('problem' in checked) throw new Error(checked.problem);
+    const read = seen === undefined ? undefined : checkItems(seen, Number.MAX_SAFE_INTEGER);
+    if (read && 'problem' in read) throw new Error(`The list the page had read could not be used: ${read.problem}`);
     // A skill is one of Settings' (2026-10-25); whether it is for the folder is said when the task runs, in its chat.
     const { skills } = await this.skills();
     /*
@@ -2365,6 +2418,7 @@ export class OperatorService {
     const before = new Map((await this.readQueue()).items.map((x) => [x.id, x]));
     const runs = (x: (typeof checked.items)[number]): boolean => {
       const was = before.get(x.id);
+      if (was && carriesOn(was, x)) return false;
       return !was || was.skill !== x.skill || (x.status ?? was.status) === 'waiting';
     };
     const unknown = checked.items.findIndex((x) => x.skill && runs(x) && !skills.some((k) => k.name === x.skill));
@@ -2375,7 +2429,7 @@ export class OperatorService {
     let problem: string | undefined;
     let letGo: QueueItem[] = [];
     const q = await this.changeQueue((x) => {
-      const merged = mergeItems(x.items, checked.items);
+      const merged = mergeItems(x.items, read ? rebaseEdit(x.items, read.items, checked.items) : checked.items);
       if ('problem' in merged) problem = merged.problem;
       else {
         letGo = x.items.filter((was) => holdsChat(was) && !merged.items.some((now) => now.id === was.id && now.sessionId === was.sessionId && holdsChat(now)));
@@ -2449,11 +2503,43 @@ export class OperatorService {
       .catch((e: unknown) => console.error('[queue] the queue stopped:', (e as Error).stack ?? (e as Error).message))
       .finally(() => {
         this.queueLoop = null;
-        void this.changeQueue((x) => {
-          x.running = false;
-        });
+        void this.settleQueue();
       });
     return await this.withBusy(started);
+  }
+
+  /**
+   * The queue's loop is over: the queue not running, and no task left "running" (second bug hunt, 2026-11-19). A task
+   * whose end could not be written — the file held a moment as it ended — stayed running for good: it could not be
+   * taken out or edited, Stop did nothing to it, and what depended on it waited until the program was started again.
+   * Its end is written now, as it ended; one whose end is not known carries on in its chat at the next run, as after a
+   * restart. Tried again a few times, the file being the one that would not be written.
+   */
+  private async settleQueue(): Promise<void> {
+    const left = this.queueEnding;
+    this.queueEnding = null;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.changeQueue((x) => {
+          x.running = false;
+          for (const item of x.items) {
+            if (item.status !== 'running') continue;
+            if (left?.id === item.id) this.setQueueItem(x, item.id, left.ended);
+            else
+              Object.assign(item, item.sessionId
+                ? { status: 'waiting', resume: true, why: CARRIES_ON_AFTER('the queue stopped while it ran'), endedAt: new Date().toISOString() }
+                : { status: 'waiting', why: undefined });
+          }
+        });
+        return;
+      } catch (e) {
+        if (attempt >= 4) {
+          console.error('[queue] the queue could not be written as stopped:', (e as Error).message);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1_500 * (attempt + 1)));
+      }
+    }
   }
 
   /**
@@ -2506,7 +2592,11 @@ export class OperatorService {
       const timer = setTimeout(() => {
         this.parkTimers.delete(timerKey);
         const still = kind === 'password' ? this.passwordAsked.has(approval.sessionId) : this.waiting.has(approval.id);
-        if (still) void this.park(key, approval, kind, ms).catch((e: unknown) => console.error('[queue] the task could not be set aside:', (e as Error).message));
+        if (!still) return;
+        if (kind !== 'password') this.parking.add(approval.id);
+        void this.park(key, approval, kind, ms)
+          .catch((e: unknown) => console.error('[queue] the task could not be set aside:', (e as Error).message))
+          .finally(() => this.parking.delete(approval.id));
       }, ms);
       timer.unref?.();
       this.parkTimers.set(timerKey, timer);
@@ -2586,6 +2676,7 @@ export class OperatorService {
       return await this.withBusy(await this.changeQueue((x) => this.setQueueItem(x, itemId, { status: 'stopped', why: 'stopped by the operator at its card', waitsFor: undefined, setAside: undefined })));
     }
     if (!s || !task?.parked) throw new Error('What that task waited for is not on its record any more; run it again.');
+    if (s.tasks.at(-1)?.id !== task.id) throw new Error(PARKED_PASSED);
     const answer = parkedAnswerFrom(task.parked, input);
     if ('problem' in answer) throw new Error(answer.problem);
     await this.store.updateSession(s.id, (x) => {
@@ -2627,7 +2718,10 @@ export class OperatorService {
         this.setQueueItem(x, item.id, { status: 'running', startedAt: now(), why: undefined, endedAt: undefined, waitsFor: undefined, resume: undefined, ...(item.resume ? {} : { sessionId: undefined }) }),
       );
       const ended = await this.runQueueItem(item).catch((e: unknown): { status: QueueStatus; why: string } => ({ status: 'failed', why: (e as Error).message }));
-      await this.changeQueue((x) => this.setQueueItem(x, item.id, { ...ended, endedAt: now() }));
+      // Kept until written: a write that fails ends the loop, and the end is written when it is over (`settleQueue`).
+      this.queueEnding = { id: item.id, ended: { ...ended, endedAt: now() } };
+      await this.changeQueue((x) => this.setQueueItem(x, item.id, this.queueEnding!.ended));
+      this.queueEnding = null;
       // Stopped — from the queue, or the chat's Stop: the rest wait for the operator. Parked: the queue goes on.
       if (ended.status === 'stopped') return;
       // Stopped with the queue, to carry on at the next run: the loop sees the queue stopped and ends (2026-11-18).
@@ -2847,6 +2941,8 @@ export class OperatorService {
     const p = task?.parked;
     const a = p?.answer;
     if (!s || !task || !p || !a || a.kind === 'stopped' || a.kind === 'released') return { problem: 'its answer is not on its record any more; run it again' };
+    // Only the last message of a conversation is carried on, as "Continue" holds it (2026-11-19).
+    if (s.tasks.at(-1)?.id !== task.id) return { problem: 'its chat went on past it (a message was written there since), so it is not carried on: say what it still needs in a new message there' };
     const continuing: NonNullable<Task['continuing']> = { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'parked', parkedFor: p.kind };
     let note = '';
     let approvedPlan: TaskPlan | undefined;
@@ -2888,6 +2984,7 @@ export class OperatorService {
         const last = worker?.tasks.find((t) => t.id === p.approval.taskId);
         const ended = last ? [`Its last attempt ended ${last.status}${last.reason ? `: ${last.reason}` : ''}.`, ...(last.summary?.trim() ? ['', 'The worker\'s summary:', '', last.summary.trim()] : [])] : [];
         note = [`Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`, ...(ended.length > 0 ? ['', ...ended] : [])].join('\n');
+        continuing.takenAsFailed = { n: r.n };
       } else {
         if (a.choice === 'restore') {
           /*
@@ -3141,6 +3238,7 @@ export class OperatorService {
 
   /** The operator's choice for a subtask that failed for a technical reason: one of the card's own. */
   answerRetry(approvalId: string, choice: string, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
+    if (this.parking.has(approvalId)) return { ok: false, problem: SET_ASIDE_NOW };
     const w = this.waiting.get(approvalId);
     if (!w?.resolveRetry || !w.approval.retry) return { ok: false, problem: 'No subtask is waiting for a choice under that id.' };
     if (!w.approval.retry.choices.includes(choice as RetryChoice)) return { ok: false, problem: `"${choice}" is not one of this card's choices: ${w.approval.retry.choices.join(', ')}.` };
@@ -3256,6 +3354,7 @@ export class OperatorService {
   }
 
   answerQuestion(approvalId: string, text: string, ran?: boolean, outcome?: string, chosen?: unknown, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
+    if (this.parking.has(approvalId)) return { ok: false, problem: SET_ASIDE_NOW };
     const w = this.waiting.get(approvalId);
     if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };
     // Kerrigan never answers commands handed over to run (2026-11-12): those are the operator's.
@@ -3326,6 +3425,7 @@ export class OperatorService {
    * another (saying what to change), or stop the task.
    */
   decidePlan(approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
+    if (this.parking.has(approvalId)) return { ok: false, problem: SET_ASIDE_NOW };
     const w = this.waiting.get(approvalId);
     if (!w || !w.resolvePlan) return { ok: false, problem: 'That plan is not waiting any more.' };
     const text = (note ?? '').trim();
@@ -3374,6 +3474,7 @@ export class OperatorService {
    * in the rest. The deny list is untouched by it.
    */
   decide(approvalId: string, action: 'run' | 'skip' | 'abort' | 'run-all'): { ok: boolean; problem?: string } {
+    if (this.parking.has(approvalId)) return { ok: false, problem: SET_ASIDE_NOW };
     const w = this.waiting.get(approvalId);
     // Said (bug hunt 2026-11-18): answered "ok: false" with 200, the press looked taken, and the card went on waiting.
     if (!w) return { ok: false, problem: CARD_GONE };
@@ -3467,6 +3568,8 @@ export class OperatorService {
         // script the bot wrote that Settings put to the operator first (audit, 2026-10-27: these were let go).
         if (w.approval.network || w.approval.model || w.approval.question || w.approval.plan || w.approval.platform || w.approval.readOnly || w.approval.retry) continue;
         if (w.approval.scripts && run.policy.writtenScripts !== 'run') continue;
+        // Being set aside by the queue (2026-11-19): its answer is given on the queue's page.
+        if (this.parking.has(id)) continue;
         this.waiting.delete(id);
         w.resolve({ action: 'run' });
       }
@@ -3935,10 +4038,14 @@ export class OperatorService {
       }
       /*
        * A project that may be changed inside one for reference only (bug hunt 2026-11-18): every change made in it would
-       * be put back after each step, so no task there could finish. Refused, with what to do.
+       * be put back after each step, so no task there could finish. Refused, with what to do. Not the chat's own folder
+       * (second bug hunt, 2026-11-19): inside one for reference only, every message there only reads and reports, as
+       * Kerrigan's text says and the chat is told — and "Open a folder" can make it so, after which every save of the
+       * projects, a name or a level 2, was refused for it.
        */
-      const all = [{ name: name || rootDir, rootDir, readOnly }, ...others].filter((p) => p.rootDir);
-      for (const w of all.filter((p) => !p.readOnly)) {
+      const chats = { name: name || rootDir, rootDir, readOnly };
+      const all = [chats, ...others].filter((p) => p.rootDir);
+      for (const w of all.filter((p) => !p.readOnly && p !== chats)) {
         const r = all.find((p) => p.readOnly && p !== w && folderInside(w.rootDir, p.rootDir));
         if (r) {
           throw new Error(`${w.name} (${w.rootDir}) is inside ${r.name} (${r.rootDir}), which is for reference only: every change made in it would be put back after each step. Untick "for reference only" on ${r.name}, or list for reference only the folders of it beside ${w.name}.`);
@@ -4147,13 +4254,11 @@ export class OperatorService {
         keepFailurePage: cfg.copilot.keepFailurePage,
         // The rows' locator reads the names (Settings' own, 2026-10-24).
         ...pickerOptions(cfg),
-        onEvent: (event, detail) => {
-          if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
-        },
+        onEvent: (event, detail) => this.onReadingEvent(event, detail),
       });
       await this.closeChatWindow('reading the models needs the browser');
       await transport.open();
-      await transport.ensureSignedIn();
+      await transport.ensureSignedIn(undefined, { boxNotWaited: true });
       const { options, current, note } = await transport.listModels();
       const catalogue: ModelCatalogue = { options, current: current ?? undefined, readAt: new Date().toISOString(), note };
       await this.store.saveModels(catalogue);
@@ -4173,9 +4278,22 @@ export class OperatorService {
       if (kerriganNow && !sameModel(kerriganNow.name, kerrigan)) await this.setDefaultKerriganModel(kerriganNow.name);
       return catalogue;
     } finally {
+      this.readingSignIn = false;
       await transport?.close().catch(() => undefined);
       this.releaseBrowser(claim.holder);
     }
+  }
+
+  /**
+   * What the window of a reading says (the models, "Check the locators"): a locator that found nothing is kept; a sign-in
+   * it waits for is said on the tab and on the page that asked (2026-11-19), where there was only a button that went on
+   * turning.
+   */
+  private onReadingEvent(event: string, detail?: Record<string, unknown>): void {
+    if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
+    if (event === 'locator-found' && detail) this.locatorFound(detail);
+    if (event === 'sign-in-required') this.readingSignIn = true;
+    if (event === 'signed-in') this.readingSignIn = false;
   }
 
   /**
@@ -4199,16 +4317,14 @@ export class OperatorService {
         headless: cfg.copilot.headless,
         keepFailurePage: cfg.copilot.keepFailurePage,
         ...pickerOptions(cfg),
-        onEvent: (event, detail) => {
-          if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
-        },
+        onEvent: (event, detail) => this.onReadingEvent(event, detail),
       });
       await this.closeChatWindow('checking the locators needs the browser');
       await transport.open();
       let results: LocatorCheck[];
       try {
         // A step of the operator's own that is not there does not stop a check, which only reads: each is looked for below.
-        await transport.ensureSignedIn(undefined, { stepsLookOnly: true });
+        await transport.ensureSignedIn(undefined, { stepsLookOnly: true, boxNotWaited: true });
         results = await transport.checkLocators();
       } catch (e) {
         if (!(e instanceof LocatorMissing) || e.key !== 'composer') throw e;
@@ -4219,6 +4335,7 @@ export class OperatorService {
       for (const r of results) if (r.status === 'found' && kept.some((f) => f.key === r.key)) await this.locatorFailures.dismiss(r.key);
       return { checkedAt: new Date().toISOString(), results };
     } finally {
+      this.readingSignIn = false;
       await transport?.close().catch(() => undefined);
       this.releaseBrowser(claim.holder);
     }
@@ -4238,7 +4355,7 @@ export class OperatorService {
    * what is in the folder now goes there too. Read at the next start; refused while work goes on, for a clone, or for
    * a folder that cannot be the bot's.
    */
-  async setHome(dir: string | null, copy: boolean): Promise<{ home: string; copied: string[]; kept: string[]; restart: true }> {
+  async setHome(dir: string | null, copy: boolean): Promise<{ home: string; copied: string[]; aside: string[]; asideDir?: string; restart: true }> {
     const layout = this.layout;
     if (layout.mode !== 'package') throw new Error('A clone keeps its records in the clone (data/ and runs/); start it with COP_DATA_DIR set to keep them elsewhere.');
     if (layout.homeFrom === 'env') throw new Error(`COP_HOME places the bot's folder (${layout.homeDir}); change or remove it where it is set.`);
@@ -4267,7 +4384,7 @@ export class OperatorService {
       return raw;
     });
     const chosen = chooseHome(layout, dir, copy);
-    console.log(`[home] the bot's folder will be ${chosen.home} from its next start${chosen.copied.length ? ` (copied: ${chosen.copied.join(', ')})` : ''}`);
+    console.log(`[home] the bot's folder will be ${chosen.home} from its next start${chosen.copied.length ? ` (copied: ${chosen.copied.join(', ')})` : ''}${chosen.asideDir ? `; what it had put aside in ${chosen.asideDir}` : ''}`);
     return { ...chosen, restart: true };
   }
 

@@ -293,6 +293,9 @@ await scenario('plans approved: a subtask that changes the folder before the pla
   const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
   t.check('the survey went to the worker; the change did not, and nothing was written', [job.lead?.subtasks, existsSync(join(h.repo, 'result.txt'))], [1, false]);
   t.truthy('the lead was told to send its plan first', told.includes('Send your plan first') && told.includes('not given to the worker'), told.slice(0, 600));
+  // Not numbered as given (second bug hunt, 2026-11-19): the next one given took the same number.
+  const listed = (job.lead as { ledger?: { items: Array<{ title: string; n?: number }> } } | undefined)?.ledger?.items ?? [];
+  t.check('the change held back for the plan is not numbered as a subtask given', listed.find((i) => i.title === 'Write result.txt')?.n, undefined);
 });
 
 await scenario('asked before each command: the worker\'s steps wait under the lead\'s conversation, "run the rest" switches the run', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h) => {
@@ -383,6 +386,27 @@ await scenario('the lead\'s conversation will not open again: stopped, not faile
   t.check('"Continue" carries the lead on in its own conversation, to the end', [went.started, (await sessionOf(h, sent.threadId)).tasks[0]!.status, wentTo], [true, 'done', leadChat]);
 });
 
+/*
+ * Found 2026-11-19 (second bug hunt): back from the worker, the lead's conversation that would not open again ended the
+ * message "failed", telling the operator to "start a new session" — which the chat has none of — where a conversation
+ * the window cannot be put back on is a stop that Continue tries again (as above).
+ */
+await scenario('back from the worker, the lead\'s conversation will not open again: stopped, not failed, no "new session"', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt holding exactly the word hello.', readOnly: false }, { understanding: 'A file result.txt holding hello.' }),
+    () => {
+      h.chat.unopenable.add(h.chat.sent.find((m) => m.contract === 'lead')!.chatId);
+      return reply.steps(write('result.txt', 'hello'));
+    },
+    reply.done('I wrote result.txt with Set-Content; it holds hello, exactly as the subtask asked.'),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('stopped, saying the conversation would not open again, and nothing of a new session', [job.status, /could not be opened again/.test(job.reason ?? ''), /new session/i.test(job.reason ?? '')], ['aborted', true, false]);
+});
+
 await scenario('limits and conversations: the subtasks run out, a fresh worker, the wrong format, a note while it works', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxSubtasks: 2 } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
   let formatBack = '';
@@ -462,6 +486,34 @@ await scenario('the subtasks raised in Settings while the worker works: counted 
   const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
   t.truthy('the report says the number saved: one subtask left of 2', report.includes('Subtasks left: 1 of 2.'), report.slice(-500));
   t.check('the second subtask was given and done', [job.status, job.lead?.subtasks, job.lead?.maxSubtasks, existsSync(join(h.repo, 'result.txt'))], ['done', 2, 2, true]);
+});
+
+/*
+ * Found 2026-11-19 (second bug hunt): Settings lowered under the subtasks given already told the lead "Subtasks left: -1
+ * of 1". None left, said with how many were given and what Settings allow now.
+ */
+await scenario('the subtasks lowered in Settings under those given: none left, never fewer, and said why', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxSubtasks: 3 } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  let report = '';
+  h.chat.script(
+    reply.lead.delegate({ title: 'Survey the project' }, { understanding: 'A file result.txt holding hello.' }),
+    reply.steps('Get-ChildItem -Name'),
+    reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
+    reply.lead.delegate({ title: 'Survey it again' }),
+    async () => {
+      const got = await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings');
+      await h.call('PUT', '/settings', { ...got.raw, limits: { ...(got.raw.limits ?? {}), maxSubtasks: 1 } });
+      return reply.steps('Get-ChildItem -Name');
+    },
+    reply.done('Still README.md at its root, and nothing else.'),
+    (m) => {
+      report = m.text;
+      return reply.lead.done();
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  t.truthy('the report says none left, with how many were given and what Settings allow now', report.includes('Subtasks left: 0 (2 given; Settings now allow 1).') && !/Subtasks left: -/.test(report), report.slice(-600));
 });
 
 await scenario('Stop while the worker works: the subtask and the message stop, nothing more is sent', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {

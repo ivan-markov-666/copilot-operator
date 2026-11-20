@@ -13,10 +13,10 @@
  *   npm run check:queue
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkItems, itemTitle, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type QueueItem } from '../src/queue/queue.js';
+import { checkItems, itemTitle, mergeItems, nextStep, rebaseEdit, skippedBecause, statusOfTask, waitsByHand, type QueueEdit, type QueueItem } from '../src/queue/queue.js';
 import { madeFromRemote, refreshQueueBranch, remoteMainOf } from '../src/queue/queueBranch.js';
 import { newItemId } from '../web/lib/queueId.js';
 import { makeDirs, startHarness, waitFor, Tally, type Harness } from './support/harness.js';
@@ -88,6 +88,29 @@ t.check('a running task is not taken out', (mergeItems(ran, [{ id: 'a', prompt: 
   t.check('a new name: it still carries on in its chat, on its branch', [renamed.name, renamed.resume, renamed.sessionId, renamed.branchName], ['Report', true, 's1', 'queue/a']);
   t.check('what it does changed: started over with the edit, nothing of the chat it carried on in', [rewritten, remodelled.resume, remodelled.sessionId, remodelled.model], [{ id: 'a', prompt: 'task a, said better', model: '', dependsOn: [], branch: 'main', review: false, status: 'waiting' }, undefined, undefined, 'Think deeper']);
   t.check('the same task sent back as it is (a move, another removed): it carries on', (mergeItems([carrying], [{ ...asIs, review: false }]) as { items: QueueItem[] }).items[0]!.resume, true);
+}
+
+/*
+ * An edit made on the list a page had read, onto the queue as it is now (second bug hunt, 2026-11-19): a second tab sent
+ * its old list, and a task added since was dropped, one taken out since came back to run again, an edit made elsewhere
+ * was undone.
+ */
+{
+  const given = (x: QueueItem): QueueEdit => ({ id: x.id, ...(x.name ? { name: x.name } : {}), prompt: x.prompt, model: x.model, dependsOn: x.dependsOn, branch: x.branch, review: x.review });
+  const seen = [item('a'), item('b'), item('c', { dependsOn: ['b'] })].map(given);
+  const now = [item('a', { name: 'Named elsewhere', status: 'done' }), item('c', { dependsOn: [] }), item('n'), item('m')];
+  const ids = (xs: QueueEdit[]) => xs.map((x) => x.id);
+  // This page renamed nothing and moved nothing: it took "a" out.
+  t.check('taken out here; "b" taken out and "n", "m" added elsewhere: they stay so, in the order of the queue', ids(rebaseEdit(now, seen, seen.filter((x) => x.id !== 'a'))), ['c', 'n', 'm']);
+  const edited = rebaseEdit(now, seen, [{ ...seen[0]!, prompt: 'task a, said better' }, seen[1]!, seen[2]!]);
+  t.check('what this page changed is taken; a field it did not touch keeps the edit made elsewhere', [edited[0]!.prompt, edited[0]!.name], ['task a, said better', 'Named elsewhere']);
+  t.check('a task taken out elsewhere is not put back to run again', ids(edited), ['a', 'c', 'n', 'm']);
+  const moved = rebaseEdit(now, seen, [seen[2]!, seen[0]!, seen[1]!]);
+  t.check('moved here: the order of this page, the tasks added since after those they came after', ids(moved), ['c', 'a', 'n', 'm']);
+  const clash = rebaseEdit(now, seen, [...seen, { ...seen[0]!, id: 'n', prompt: 'new here', dependsOn: [] }, { ...seen[0]!, id: 'z', prompt: 'after it', dependsOn: ['n'] }]);
+  t.check('a new task whose id was given meanwhile gets one of its own, and what depends on it follows', clash.slice(-2).map((x) => [x.id, x.prompt, x.dependsOn]), [['nx', 'new here', []], ['z', 'after it', ['nx']]]);
+  t.check('and the one added elsewhere under that id is kept as it was', clash.find((x) => x.id === 'n')!.prompt, 'task n');
+  t.check('a task added here depending on one taken out since: it no longer does', rebaseEdit([item('b')], [item('a'), item('b')].map(given), [item('a'), item('b'), item('c', { dependsOn: ['a'] })].map(given)).map((x) => [x.id, x.dependsOn]), [['b', []], ['c', []]]);
 }
 
 /*
@@ -950,6 +973,30 @@ try {
   writeFileSync(file, '', 'utf8');
   const fresh = await h12.call<QueueView>('PUT', '/queue', { items: [{ id: 'b6', name: 'New', prompt: 'Write n.txt holding n.', model: '', dependsOn: [], branch: 'folder', review: false }] });
   t.check('an empty one is a queue not begun: the task added', fresh.items.map((x) => x.id), ['b6']);
+
+  // Two tabs on the queue page (second bug hunt, 2026-11-19): each sends its list with the one it had read.
+  const asEdits = (q: QueueView) => q.items.map((x) => ({ id: x.id, ...(x.name ? { name: x.name } : {}), prompt: x.prompt, model: x.model, dependsOn: x.dependsOn, branch: x.branch, review: x.review }));
+  const task = (id: string, name: string) => ({ id, name, prompt: `Write ${id}.txt.`, model: '', dependsOn: [], branch: 'folder', review: false });
+  const tab2 = asEdits(fresh);
+  let tab1 = asEdits(await h12.call<QueueView>('PUT', '/queue', { items: [...asEdits(fresh), task('c6', 'Added in tab 1')], seen: asEdits(fresh) }));
+  tab1 = asEdits(await h12.call<QueueView>('PUT', '/queue', { items: tab1.map((x) => (x.id === 'b6' ? { ...x, name: 'Renamed in tab 1' } : x)), seen: tab1 }));
+  const fromTab2 = await h12.call<QueueView>('PUT', '/queue', { items: [...tab2, task('d6', 'Added in tab 2')], seen: tab2 });
+  t.check('a tab that had not read again adds a task: the one added in the other tab stays, its edit too', fromTab2.items.map((x) => [x.id, x.name]), [['b6', 'Renamed in tab 1'], ['c6', 'Added in tab 1'], ['d6', 'Added in tab 2']]);
+  const tab2Now = asEdits(fromTab2);
+  await h12.call('PUT', '/queue', { items: tab2Now.filter((x) => x.id !== 'c6'), seen: tab2Now });
+  const late = await h12.call<QueueView>('PUT', '/queue', { items: [tab2Now[2]!, tab2Now[0]!, tab2Now[1]!], seen: tab2Now });
+  t.check('a task taken out in one tab is not put back by a move in the other', late.items.map((x) => x.id), ['d6', 'b6']);
+
+  /*
+   * A task that carries on in its own chat, its skill taken out of Settings since (second bug hunt, 2026-11-19): every
+   * edit of the queue was refused for it, though it carries on as it was given there and never reads its skill again.
+   */
+  writeFileSync(file, JSON.stringify({ running: false, updatedAt: '', items: [{ id: 'c6', name: 'Carries on', prompt: 'Write c.txt.', model: '', dependsOn: [], branch: 'folder', review: false, skill: 'gone-skill', status: 'waiting', resume: true, sessionId: 'no-such-chat' }] }), 'utf8');
+  const carried = { id: 'c6', name: 'Carries on', prompt: 'Write c.txt.', model: '', dependsOn: [], branch: 'folder', review: false, skill: 'gone-skill' };
+  const withOther = await h12.raw('PUT', '/queue', { items: [carried, task('e6', 'Added beside it')] });
+  t.check('another task added beside one that carries on with a skill gone from Settings: taken', [withOther.status < 300, ((withOther.body as QueueView).items ?? []).map((x) => x.id)], [true, ['c6', 'e6']]);
+  const rewritten = await h12.raw('PUT', '/queue', { items: [{ ...carried, prompt: 'Write c.txt, said better.' }, task('e6', 'Added beside it')] });
+  t.check('what it does changed, so it starts over with that skill: refused, naming it', [rewritten.status, /gone-skill/.test(JSON.stringify(rewritten.body))], [400, true]);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
@@ -993,6 +1040,88 @@ try {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
   await h11?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): the end of a queue task that could not be written — queue.json held a moment as
+ * the task ended — left it "running" for good: not to be taken out or edited, Stop doing nothing to it, and the tasks
+ * depending on it waiting until the program was started again. Its end is written once the file can be.
+ */
+console.log('\n--- the end of a task that could not be written at once: written when it can be ---');
+let h14: Harness | null = null;
+try {
+  h14 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  const file = join(h14.dataDir, 'queue.json');
+  await h14.call('PUT', '/queue', { items: [{ id: 'a8', name: 'Ends while the file is held', prompt: 'Say you are done.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h14.chat.script(() => {
+    // Read-only for a few seconds, as a scanner holding it would: the end's write is refused, and every one after it.
+    chmodSync(file, 0o444);
+    setTimeout(() => chmodSync(file, 0o666), 3_000);
+    return reply.done('Nothing was asked of the folder; I am done.');
+  });
+  await h14.call('POST', '/queue/run');
+  const ended = await waitFor('the queue to end, its task no longer running', async () => {
+    const q = await h14!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running') ? q : null;
+  }, 30_000).catch(async () => await h14!.call<QueueView>('GET', '/queue'));
+  t.check('its end written once the file could be: done, the queue not running', [ended.running, ended.items[0]?.status], [false, 'done']);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  try {
+    if (h14) chmodSync(join(h14.dataDir, 'queue.json'), 0o666);
+  } catch {
+    /* gone with its folder */
+  }
+  await h14?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): a card answered just as the queue set its task aside was taken, and the task was
+ * stopped and set aside all the same, asking for the answer again. A press while it is set aside is refused, saying
+ * where to answer: on the queue's page, where it waits.
+ */
+console.log('\n--- a card pressed as the queue sets its task aside: refused, said where to answer ---');
+let h15: Harness | null = null;
+try {
+  h15 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', questions: 'ask' }, copilot: { defaultModel: 'Auto' } } });
+  await h15.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h15.call('PUT', '/queue', { items: [{ id: 'a9', name: 'Asks', prompt: 'Ask me which name to use for a9.txt.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h15.chat.script(reply.ask('Which name should a9.txt hold?', ['north', 'south'], 'The task leaves it to you.'));
+  let card = '';
+  let late: { ok: boolean; problem?: string } | null = null;
+  // Pressed in the very moment the queue says it set the task aside, before it is stopped.
+  h15.ops.bus.subscribe('*', (e) => {
+    const id = (e.data as { approvalId?: unknown } | undefined)?.approvalId;
+    if (e.type === 'approval-requested' && typeof id === 'string') card = id;
+    if (e.type === 'task-parked' && card && !late) late = h15!.ops.answerQuestion(card, 'north');
+  });
+  await h15.call('POST', '/queue/run');
+  const q = await waitFor('the task set aside', async () => {
+    const v = await h15!.call<QueueView>('GET', '/queue');
+    return !v.running && v.items[0]?.status === 'parked' ? v : null;
+  }, 60_000);
+  const pressed = late as { ok: boolean; problem?: string } | null;
+  t.truthy("pressed as it was set aside: refused, saying to answer on the queue's page", pressed?.ok === false && /queue's page/.test(pressed.problem ?? ''), pressed);
+  t.check('the task set aside, waiting for that answer', q.items[0]?.status, 'parked');
+
+  /*
+   * Its chat went on past it (second bug hunt, 2026-11-19): a message written there since. Answered on the queue's page,
+   * the older message ran again after the newer one, in the same conversation. Refused now, saying what to do.
+   */
+  const thread = q.items[0]!.sessionId!;
+  h15.chat.script(reply.done('I looked: a9.txt is not there yet, and nothing else was asked.'));
+  await h15.call('POST', '/chat', { text: 'Is a9.txt there yet?', threadId: thread });
+  await h15.call('POST', `/sessions/${thread}/start`, { mode: 'unattended' });
+  await h15.idle();
+  const passed = await h15.raw('POST', '/queue/items/a9/answer', { answer: 'north', sessionId: thread });
+  t.truthy('answered after a newer message in its chat: refused, saying to stop it and write a new message', passed.status === 400 && /gone on past this task/.test(JSON.stringify(passed.body)), passed.body);
+  const stopped = await h15.raw('POST', '/queue/items/a9/answer', { stop: true, sessionId: thread });
+  t.check('and Stop on it is taken', [stopped.status < 300, (await h15.call<QueueView>('GET', '/queue')).items[0]?.status], [true, 'stopped']);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h15?.stop();
 }
 
 t.finish();

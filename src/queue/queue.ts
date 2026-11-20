@@ -208,6 +208,89 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
   return { items };
 }
 
+/** A task as an edit of the list gives it. */
+export type QueueEdit = Omit<QueueItem, 'status'> & { status?: QueueStatus };
+
+/**
+ * An edit a page made on the list it had read (`seen`), put onto the queue as it is now (second bug hunt, 2026-11-19).
+ * The page sends the whole list, and a list read before a change — a second tab, or a page that had not read again yet —
+ * dropped a task added since, put back one taken out since (to run again), and undid an edit made elsewhere. What this
+ * page changed is taken; what it did not touch stays as the queue has it now:
+ * - a task added since stays, after the tasks it came after;
+ * - one taken out since stays out;
+ * - a field this page did not change keeps the queue's value, so an edit made elsewhere is not undone;
+ * - the order is this page's when it moved something, else the queue's.
+ * A new task whose id was given meanwhile to another gets one of its own.
+ */
+export function rebaseEdit(current: QueueItem[], seen: QueueEdit[], edited: QueueEdit[]): QueueEdit[] {
+  const saw = new Map(seen.map((x) => [x.id, x]));
+  const now = new Map(current.map((x) => [x.id, x]));
+  const taken = new Set([...current.map((x) => x.id), ...seen.map((x) => x.id)]);
+  const renamed = new Map<string, string>();
+  const kept = new Map<string, QueueEdit>();
+  const fresh: QueueEdit[] = [];
+  const pageOrder: string[] = [];
+  for (const e of edited) {
+    const was = saw.get(e.id);
+    if (!was) {
+      let id = e.id;
+      while (taken.has(id)) id = `${id}x`;
+      taken.add(id);
+      if (id !== e.id) renamed.set(e.id, id);
+      const dependsOn = e.dependsOn.map((d) => renamed.get(d) ?? d);
+      fresh.push({ ...e, id, dependsOn });
+      pageOrder.push(id);
+      continue;
+    }
+    const is = now.get(e.id);
+    if (!is) continue;
+    const out: Record<string, unknown> = { id: e.id };
+    for (const key of GIVEN) {
+      if (key === 'id') continue;
+      const v = asSaid(e[key]) === asSaid(was[key]) ? is[key] : e[key];
+      if (v !== undefined) out[key] = v;
+    }
+    if (e.status) out.status = e.status;
+    kept.set(e.id, out as QueueEdit);
+    pageOrder.push(e.id);
+  }
+  const knownOnPage = pageOrder.filter((id) => kept.has(id));
+  const moved = knownOnPage.join('\n') !== seen.map((x) => x.id).filter((id) => kept.has(id)).join('\n');
+  const since = current.filter((x) => !saw.has(x.id));
+  let order: string[];
+  if (moved) {
+    order = [...pageOrder];
+    // After every task it came after: one added at the end stays at the end.
+    for (const x of since) {
+      const i = current.indexOf(x);
+      const at = Math.max(0, ...current.slice(0, i).map((o) => order.indexOf(o.id) + 1));
+      order.splice(at, 0, x.id);
+    }
+  } else {
+    order = [...current.filter((x) => kept.has(x.id) || !saw.has(x.id)).map((x) => x.id), ...fresh.map((x) => x.id)];
+  }
+  const byId = new Map<string, QueueEdit>([...kept, ...fresh.map((x) => [x.id, x] as const), ...since.map((x) => [x.id, asGiven(x)] as const)]);
+  // What a task depends on is a task before it that is still there.
+  const before = new Set<string>();
+  return order.map((id) => {
+    const x = byId.get(id)!;
+    const dependsOn = x.dependsOn.filter((d) => before.has(d));
+    before.add(id);
+    return dependsOn.length === x.dependsOn.length ? x : { ...x, dependsOn };
+  });
+}
+
+/**
+ * Whether an edit leaves a task carrying on in its own chat, as `mergeItems` keeps it: one that carries on, with nothing
+ * of what it does changed. It goes on as it was given there, its skill sent with it already, so a skill taken out of
+ * Settings since is not its concern (second bug hunt, 2026-11-19: it blocked every edit of the queue).
+ */
+export function carriesOn(was: QueueItem, edit: QueueEdit): boolean {
+  if (!was.resume || was.status !== 'waiting') return false;
+  const given = asGiven(edit);
+  return !WHAT_IT_DOES.some((key) => asSaid(was[key]) !== asSaid(given[key]));
+}
+
 /** What the operator gives a task, apart from what its runs give it. */
 const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill', 'plan'] as const;
 /** Of what is given, what the task's chat is told: an edit of it starts over a task that carries on. */

@@ -6,8 +6,8 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { git, looksLikeRepo, repoState } from '../vcs/git.js';
 import { moveOver } from './store.js';
 
@@ -72,11 +72,18 @@ function versionOf(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex').slice(0, 20);
 }
 
+/**
+ * Said when the file is not on disk (any more): deleted or renamed under the editor (second bug hunt, 2026-11-19), which
+ * the page says, keeping the edit and offering to save it there again.
+ */
+export const GONE_FROM_DISK = 'gone-from-disk';
+const gone = (clean: string): Error => Object.assign(new Error(`There is no file ${clean} in the project folder.`), { code: GONE_FROM_DISK });
+
 /** One file of the folder as it is on disk, as text; a binary or very large one is said to be one. */
 export async function workspaceFile(dir: string, path: string, maxBytes = MAX_EDIT_BYTES): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string }> {
   const { clean, full } = insideFolder(dir, path);
   const st = await stat(full).catch(() => null);
-  if (!st?.isFile()) throw new Error(`There is no file ${clean} in the project folder.`);
+  if (!st?.isFile()) throw gone(clean);
   if (st.size > maxBytes) return { path: clean, text: null, binary: false, tooLarge: true, size: st.size };
   const bytes = await readFile(full);
   const binary = bytes.subarray(0, 8000).includes(0);
@@ -112,11 +119,19 @@ export const CHANGED_ON_DISK = 'changed-on-disk';
  * is there already and is text; and only over the version the edit was made on (`base`), so a change the chat made to
  * it meanwhile is not overwritten without the operator knowing — without `base` it is saved whatever is there. The
  * file keeps its own line endings and its byte-order mark: the editor works in LF, and a CRLF file stays CRLF.
+ * `again`: a file deleted or renamed under the editor, saved where it was with the editor's text (2026-11-19).
  */
-export async function saveWorkspaceFile(dir: string, path: string, text: string, base?: string): Promise<{ path: string; version: string; size: number }> {
+export async function saveWorkspaceFile(dir: string, path: string, text: string, base?: string, again = false): Promise<{ path: string; version: string; size: number }> {
   const { clean, full } = insideFolder(dir, path);
   const st = await stat(full).catch(() => null);
-  if (!st?.isFile()) throw new Error(`There is no file ${clean} in the project folder.`);
+  if (!st && again) {
+    const bytes = Buffer.from(text.replace(/\r\n/g, '\n'), 'utf8');
+    if (bytes.length > MAX_EDIT_BYTES) throw new Error(`The text is too large to save (${bytes.length} bytes).`);
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, bytes, { flag: 'wx' });
+    return { path: clean, version: versionOf(bytes), size: bytes.length };
+  }
+  if (!st?.isFile()) throw gone(clean);
   if (st.size > MAX_EDIT_BYTES) throw new Error(`${clean} is too large to edit here.`);
   const before = await readFile(full);
   if (before.subarray(0, 8000).includes(0)) throw new Error(`${clean} is not a text file.`);

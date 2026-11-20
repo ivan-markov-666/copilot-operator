@@ -215,6 +215,8 @@ await scenario('stopped at its plan, then carried on: it plans again, and nothin
   h.chat.script(
     (m) => {
       t.truthy('carried on with no plan approved: asked for a plan first, not to carry on with the work', m.text.includes('## Plan first (plan mode)') && m.text.includes('Its plan was not approved yet') && !m.text.includes('start from your plan'), m.text.slice(-1500));
+      // Once (second bug hunt, 2026-11-19): the note was written into the message and again with the runner's notes.
+      t.check('the plan-mode note said once', m.text.split('## Plan first (plan mode)').length - 1, 1);
       return reply.plan();
     },
     (m) => {
@@ -232,6 +234,42 @@ await scenario('stopped at its plan, then carried on: it plans again, and nothin
   await runSteps(h);
   const task = await taskOf(h, s!.id);
   t.check('done, on the plan approved in this attempt', [task.status, task.plan?.approved?.by], ['done', 'operator']);
+});
+
+/*
+ * Found 2026-11-19 (second bug hunt): a plan approved in an attempt before a retry in a fresh conversation was taken
+ * as the plan of a message carried on after that retry, a plan its conversation never saw: the retry stopped at its
+ * own plan's card, "Continue" went straight to the work. A plan counts only in the conversation it was approved in.
+ */
+await scenario('a plan approved before a retry in a fresh chat: carried on after the retry, it plans again', { execution: { planMode: 'approve' }, limits: { retryBlockedInFreshChat: 1 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'fresh-retry')] });
+  h.chat.script(reply.plan(), ...reply.triedThenBlocked(), reply.plan());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  const first = await planWaiting(h, 1);
+  await h.call('POST', `/approvals/${first.id}/plan`, { action: 'approve' });
+  // Its step run, then blocked: tried again by itself in a fresh chat, which plans first.
+  const retried = await waitFor('the retry in a fresh chat to wait at its own plan', async () => {
+    const all = await h.call<Approval[]>('GET', '/approvals');
+    for (const a of all) if (!a.plan) await h.call('POST', `/approvals/${a.id}`, { action: 'run' });
+    return all.find((a) => a.plan && a.id !== first.id) ?? null;
+  });
+  await h.call('POST', `/approvals/${retried.id}/plan`, { action: 'stop' });
+  await h.idle();
+  const stopped = await taskOf(h, s!.id);
+  t.check('the retry stopped at its plan; the attempt before it had one approved', [stopped.status, stopped.plan?.approved, stopped.attempts?.[0]?.plan?.approved?.by], ['aborted', undefined, 'operator']);
+
+  h.chat.script(
+    (m) => {
+      t.truthy('carried on: asked for a plan first, not to work to the plan of the conversation before', m.text.includes('## Plan first (plan mode)') && !m.text.includes('start from your plan'), m.text.slice(-1500));
+      return reply.plan();
+    },
+  );
+  await h.call('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`, {});
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  const again = await planWaiting(h, 1);
+  t.truthy('its plan waits on its card', !!again);
+  await h.call('POST', `/approvals/${again.id}/plan`, { action: 'stop' });
+  await h.idle();
 });
 
 await scenario('a session\'s own setting outranks Settings: from the import, and from the session page', { execution: { planMode: 'auto' } }, async (h) => {

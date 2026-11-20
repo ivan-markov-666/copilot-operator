@@ -11,6 +11,7 @@
  * not opened.
  */
 import { MarkdownView } from './markdownView';
+import { ErrorBoundary } from '../errorBoundary';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dropDraft, keepDraft, readDraft } from '../../lib/drafts';
 import { api, type WorkspaceFile } from '../../lib/api';
@@ -36,6 +37,11 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
   const [busy, setBusy] = useState(false);
   /** The file changed on disk under an edit: the operator chooses to read it again or to save over it. */
   const [conflict, setConflict] = useState(false);
+  /**
+   * The file is not on disk any more — deleted or renamed under the editor (second bug hunt, 2026-11-19): said, the text
+   * kept, and saved there again at a press. The tab kept the old text with nothing said, and a save then failed.
+   */
+  const [gone, setGone] = useState(false);
   const [choice, setChoice] = useState<'auto' | LangId>('auto');
   /** Goes up when the text is set from outside the editor — read from disk, put back — so the editor takes it. */
   const [reset, setReset] = useState(0);
@@ -109,7 +115,11 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
   usePoll(
     async () => {
       if (!file?.version || busy) return;
-      const f = await api.workspaceFile(path, dir).catch(() => null);
+      const f = await api.workspaceFile(path, dir).catch((e: unknown) => {
+        if ((e as { status?: number }).status === 404) setGone(true);
+        return null;
+      });
+      if (f) setGone(false);
       if (!f?.version || f.version === file.version) return;
       if (dirty) setConflict(true);
       else {
@@ -146,17 +156,39 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
     }
   };
   const view: MdView = isMarkdown ? mdView : 'code';
-  const save = async (over = false): Promise<void> => {
+  /*
+   * Ctrl+Shift+V from the file as it reads (second bug hunt, 2026-11-19): only the editor had the key, and with no editor
+   * shown it did nothing. Not in a box being written in, where it pastes without formatting, nor in the editor of a
+   * side-by-side view, which has the key itself.
+   */
+  const root = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!isMarkdown || view === 'code') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== 'v') return;
+      // The tab in front only: the others are kept, hidden, each with its own view.
+      if (!root.current || root.current.closest('[hidden]')) return;
+      const at = e.target as HTMLElement | null;
+      if (at?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .monaco-editor')) return;
+      e.preventDefault();
+      setMdView('code');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+  const save = async (over = false, again = false): Promise<void> => {
     if (!file || busy) return;
     setBusy(true);
     setSaid('');
     try {
-      const r = await api.saveWorkspaceFile(path, text, over ? undefined : file.version, dir);
+      const r = await api.saveWorkspaceFile(path, text, over || again ? undefined : file.version, dir, again);
       setFile({ ...file, text, version: r.version, size: r.size });
       setConflict(false);
+      setGone(false);
       setSaid(t('ed.saved'));
     } catch (e) {
       if ((e as { status?: number }).status === 409) setConflict(true);
+      else if ((e as { status?: number }).status === 404) setGone(true);
       else setSaid((e as Error).message);
     } finally {
       setBusy(false);
@@ -180,7 +212,7 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
     );
   }
   return (
-    <div className="ed">
+    <div className="ed" ref={root}>
       <div className="ed-bar">
         <FileIcon path={path} />
         <span className="ed-path" title={file.path}>{file.path}</span>
@@ -213,7 +245,13 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
           {t('ed.save')}
         </button>
       </div>
-      {conflict && (
+      {gone && (
+        <div className="notice caution small ed-gone" role="alert">
+          <span>{t('ed.goneFromDisk')}</span>
+          <button type="button" className="small" disabled={busy} onClick={() => void save(false, true)}>{t('ed.saveAgain')}</button>
+        </div>
+      )}
+      {conflict && !gone && (
         <div className="notice caution small ed-conflict" role="alert">
           <span>{t('ed.changedOnDisk')}</span>
           <button type="button" className="small" onClick={() => void read()}>{t('ed.reload')}</button>
@@ -223,7 +261,9 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
       <div className={`ed-body ed-show-${view}`}>
         {view !== 'code' && (
           <div className="ed-preview">
-            <MarkdownView text={text} path={path} onOpenFile={(p) => onOpenFile?.(p)} />
+            <ErrorBoundary resetKey={text}>
+              <MarkdownView text={text} path={path} onOpenFile={(p) => onOpenFile?.(p)} />
+            </ErrorBoundary>
           </div>
         )}
         {view !== 'preview' && (

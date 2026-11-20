@@ -22,6 +22,7 @@ import { CHAT_KEYS, fillLocator, locatorProblem, PICKER_KEYS, type ChatGroup, ty
 import { LocatorFailureNotice, useLocatorFailures } from '../locatorFailure';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
+import { usePoll } from '../../lib/usePoll';
 import { ModelPicker } from '../modelPicker';
 import { InfoTip } from '../popover';
 import { BranchIcon } from '../branchIcon';
@@ -50,7 +51,12 @@ function useSpotlight(): void {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let frame = 0;
     const light = (): void => {
-      const id = decodeURIComponent(window.location.hash.slice(1));
+      let id = window.location.hash.slice(1);
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // An address typed with a "%" that is not an escape: looked for as it is.
+      }
       if (!id) return;
       const until = Date.now() + 5000;
       cancelAnimationFrame(frame);
@@ -1121,6 +1127,24 @@ const ROLES: Record<ModelRole, RolePlan> = {
   },
 };
 
+/**
+ * While a reading of Copilot's page — the models, "Check the locators" — waits for the operator to sign in (second bug
+ * hunt, 2026-11-19): said where it was asked for, not only on the tab; the button alone went on turning.
+ */
+function SignInWhileReading({ active }: { active: boolean }) {
+  const { t } = useT();
+  const [waits, setWaits] = useState(false);
+  usePoll(async () => setWaits(!!(await api.activity().catch(() => null))?.signIn), 1500, active);
+  useEffect(() => {
+    if (!active) setWaits(false);
+  }, [active]);
+  return active && waits ? (
+    <p className="notice caution small reading-sign-in" role="status">
+      {t('read.signInWaiting')}
+    </p>
+  ) : null;
+}
+
 function RoleModelSection({ role, catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels & { role: ModelRole }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
@@ -1168,6 +1192,7 @@ function RoleModelSection({ role, catalogue, setCatalogue, refreshModels, refres
             {t('model.refresh')}
           </button>
         </Field>
+        <SignInWhileReading active={refreshing} />
         <p className="muted small field-after">
           {catalogue?.readAt ? t('model.readAt', { t: fmtTime(catalogue.readAt), n: catalogue.options.length }) : t('model.neverRead')}
         </p>
@@ -1341,6 +1366,7 @@ function ChatLocatorsSection() {
           </button>
           <InfoTip label={t('info.about', { name: t('chatloc.check') })} text={t('chatloc.checkWhy')} />
         </div>
+        <SignInWhileReading active={checking} />
         {checkErr && <div className="err" role="alert">{checkErr}</div>}
         {checked && (
           <p className="muted small locator-check-done" role="status">

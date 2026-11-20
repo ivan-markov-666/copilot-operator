@@ -46,7 +46,8 @@ function HomeRow({ doctor, onSaved }: { doctor: Record<string, unknown>; onSaved
     setErr('');
     try {
       const r = await api.setHome(dir, copy);
-      setSaved(t('sys.homeSaved', { dir: r.home }));
+      // What the folder had already, put aside beside it (2026-11-19): said, with where, so nothing is lost from sight.
+      setSaved([t('sys.homeSaved', { dir: r.home }), ...(r.asideDir && r.aside.length > 0 ? [t('sys.homeAside', { parts: r.aside.join(', '), dir: r.asideDir })] : [])].join(' '));
       setAsking(null);
       onSaved();
     } catch (e) {
@@ -265,7 +266,8 @@ export default function SystemPage() {
       <div className="panel">
         <h2>{t('sys.signin')}</h2>
         <p className="muted small">{t('sys.signinHint')}</p>
-        <pre>npx tsx src/cli.ts login --account you@yourtenant.org</pre>
+        {/* As this install runs it (second bug hunt, 2026-11-19): an npm install has no src/cli.ts, only the cop command. */}
+        <pre className="sys-signin-cmd">{doctor?.install === 'package' ? 'npx cop login --account you@yourtenant.org' : 'npx tsx src/cli.ts login --account you@yourtenant.org'}</pre>
       </div>
     </>
   );

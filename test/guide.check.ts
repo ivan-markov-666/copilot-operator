@@ -260,6 +260,8 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^prog\.removeOne$/, why: 'the name of the ✕ beside each program, with the program in it, for a screen reader; the lists it sits in are guided' },
   { pattern: /^search\.expand$/, why: '"Collapse All" pressed again, which the guide says of it' },
   { pattern: /^md\.externalImage$/, why: 'the tooltip of a picture link inside a Markdown preview, whose Preview button is guided' },
+  { pattern: /^err\.again$/, why: 'shown only where a part of a page failed to draw (errorBoundary.tsx), with what failed; nobody is sent to look for it' },
+  { pattern: /^ed\.saveAgain$/, why: 'shown only in the notice of a file deleted or renamed under the editor, which says what it does' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
 const guided = new Set(claims.map((c) => c.key));

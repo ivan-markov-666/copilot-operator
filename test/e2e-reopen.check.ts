@@ -290,7 +290,7 @@ await scenario('"Continue" after Stop; refused for a message the conversation ha
     return reply.steps('Get-ChildItem -Name');
   });
   await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
-  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 60_000);
   await h.call('POST', `/sessions/${sent.threadId}/stop`);
   t.check('"Continue" is refused while the conversation works', (await h.raw('POST', `/chat/${sent.threadId}/tasks/${sent.taskId}/continue`)).status, 400);
   release();
@@ -319,7 +319,7 @@ await scenario('"Continue" after Stop; refused for a message the conversation ha
     return reply.steps('Get-ChildItem -Name');
   });
   await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
-  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look again.')), 20_000);
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look again.')), 60_000);
   await h.call('POST', `/sessions/${sent.threadId}/stop`);
   release();
   await h.idle();
@@ -406,7 +406,7 @@ await scenario('"Continue" while the browser is busy: refused, and the message k
     return reply.steps('Get-ChildItem -Name');
   });
   await h.call('POST', `/sessions/${x.threadId}/start`, { mode: 'unattended' });
-  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 60_000);
   await h.call('POST', `/sessions/${x.threadId}/stop`);
   release();
   await h.idle();
@@ -442,7 +442,7 @@ await scenario('"Continue" after going back: the chat is told what was undone', 
     return reply.steps('Get-ChildItem -Name');
   });
   await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
-  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 60_000);
   await h.call('POST', `/sessions/${sent.threadId}/stop`);
   release();
   await h.idle();

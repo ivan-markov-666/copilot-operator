@@ -9,6 +9,7 @@ import { SkipLink } from './nav';
 import { Shell } from './shell';
 import { DialogHost } from './dialog';
 import { ScrollJump } from './scrollJump';
+import { ErrorBoundary } from './errorBoundary';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -43,7 +44,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <DialogHost>
               <SkipLink />
               {/* The page's frame: the workbench at / takes the whole window, the other pages their column. */}
-              <Shell>{children}</Shell>
+              {/* A banner that fails to draw does not take the page with it (second bug hunt, 2026-11-19). */}
+              <ErrorBoundary>
+                <Shell>{children}</Shell>
+              </ErrorBoundary>
               <ScrollJump />
             </DialogHost>
           </LanguageProvider>

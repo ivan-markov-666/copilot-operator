@@ -458,4 +458,36 @@ await scenario('a card the queue kept, answered later with "Restore the snapshot
   t.truthy('the worker is told the folder was put back, to start over', again.includes('The folder was put back to how it was when the subtask began') && !again.includes('Carry on from the folder'), again.slice(-900));
 }, { commandTimeoutSec: 2, idleTimeoutSec: 2 });
 
+/*
+ * Found 2026-11-19 (second bug hunt): a card the queue kept, answered later with "Take it as failed": the lead was told
+ * the subtask was taken as failed, to decide without it, and in the same message that it was cut off with no report,
+ * to give it again. Told only the first now.
+ */
+await scenario('a card the queue kept, answered later with "Take it as failed": the lead is not also told to give it again', { subtaskRetryMode: 'same' }, async (h) => {
+  type QueueView = { running: boolean; items: Array<{ id: string; status: string; sessionId?: string }> };
+  await h.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h.call('PUT', '/queue', { items: [{ id: 'r2', prompt: ASSIGNMENT, model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, lead: true }] });
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, understood),
+    reply.steps({ cmd: "Set-Content -Path two.txt -Value 'two'; Start-Sleep -Seconds 30", expect: 'fast' }),
+    cutOff,
+    cutOff,
+  );
+  await h.call('POST', '/queue/run');
+  await waitFor('the card to be set aside', async () => {
+    const q = await h.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? q : null;
+  }, 90_000);
+  const before = h.chat.sent.length;
+  await h.call('POST', '/queue/items/r2/answer', { choice: 'accept' });
+  h.chat.script(reply.lead.done(LEAD_DONE));
+  await h.call('POST', '/queue/run');
+  await waitFor('the queue to end', async () => {
+    const q = await h.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  const told = h.chat.sent.slice(before).map((m) => m.text).join('\n\n');
+  t.truthy('told it is taken as failed, to decide without it, and not to give it again', told.includes('is taken as failed, at the operator\'s word') && !told.includes('was cut off when the work stopped'), told.slice(-1500));
+}, { commandTimeoutSec: 2, idleTimeoutSec: 2 });
+
 t.finish();

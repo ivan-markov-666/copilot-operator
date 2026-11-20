@@ -315,8 +315,24 @@ function WorkbenchInner() {
         toChat();
       }
     };
+    /*
+     * Heard before the page's own parts (second bug hunt, 2026-11-19): in the editor, Monaco took Ctrl+K (the start of
+     * its two-key shortcuts) and Ctrl+L (a line selected) for itself, and the palette and the chat did not open from
+     * there. Only the keys handled above are taken; every other one goes on to the editor as before.
+     */
+    const first = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (!(e.ctrlKey || e.metaKey) || !(k === 'k' || k === 'l') || e.shiftKey || e.altKey) return;
+      if (!(e.target as HTMLElement | null)?.closest?.('.monaco-editor')) return;
+      e.stopPropagation();
+      onKey(e);
+    };
+    window.addEventListener('keydown', first, true);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', first, true);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [layout]);
 
   const commands = useMemo<PaletteCommand[]>(

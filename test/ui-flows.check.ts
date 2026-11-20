@@ -1176,7 +1176,7 @@ try {
       const body = r.request().postDataJSON() as { dir: string | null; copy: boolean };
       puts.push(body);
       report = { ...report, homeNext: body.dir ?? home };
-      await r.fulfill({ json: { home: body.dir ?? home, copied: body.copy ? ['data', 'edge-profile'] : [], kept: [], restart: true } });
+      await r.fulfill({ json: { home: body.dir ?? home, copied: body.copy ? ['data', 'edge-profile'] : [], aside: body.copy ? ['data'] : [], ...(body.copy ? { asideDir: 'D:\\bot.before-20261119-093005' } : {}), restart: true } });
     });
     await page.route('**/api/browse-folder', (r) => r.fulfill({ json: { ok: true, path: 'D:\\bot' } }));
 
@@ -1184,6 +1184,8 @@ try {
     const row = page.locator('tr.sys-home');
     await row.waitFor();
     t.check('no Desktop on the page any more', (await page.locator('th').allTextContents()).filter((x) => /desktop/i.test(x)), []);
+    // An npm install has no src/cli.ts (second bug hunt, 2026-11-19): the sign-in command is the cop one.
+    t.check('the sign-in command, as an npm install runs it', await page.locator('pre.sys-signin-cmd').textContent(), 'npx cop login --account you@yourtenant.org');
     t.check("the bot's folder, by default", [await row.locator('.sys-home-dir').textContent(), await row.locator('.badge').textContent()], [home, en['sys.homeFromDefault']]);
     t.truthy('where its records were copied from, for the operator to delete', ((await row.locator('.sys-home-moved').textContent()) ?? '').includes('C:\\.copilot-operator'), await row.textContent());
     // When, in the page's language (English's dates are en-GB), not the browser's: it read 10/22/2026 on a Bulgarian page.
@@ -1204,7 +1206,7 @@ try {
     await ask.getByRole('button', { name: en['sys.homeUse']!, exact: true }).click();
     await row.locator('.sys-home-saved').waitFor();
     t.check('Use this folder sends the folder, with the copy', puts, [{ dir: 'D:\\bot', copy: true }]);
-    t.check('and says to start the bot again', await row.locator('.sys-home-saved').textContent(), fill('sys.homeSaved', { dir: 'D:\\bot' }));
+    t.check('and says to start the bot again, and where what the folder had was put aside', await row.locator('.sys-home-saved').textContent(), `${fill('sys.homeSaved', { dir: 'D:\\bot' })} ${fill('sys.homeAside', { parts: 'data', dir: 'D:\\bot.before-20261119-093005' })}`);
     await waitFor('the next start named', async () => (await row.locator('.sys-home-next').count()) === 1, 10_000);
     t.check('the row says which folder the next start uses, this one still in use', [await row.locator('.sys-home-next').textContent(), await row.locator('.sys-home-dir').textContent()], [fill('sys.homeNext', { dir: 'D:\\bot' }), home]);
 
@@ -2558,12 +2560,16 @@ try {
   await scenario('Markdown as it reads: headings, a table, code, a mermaid diagram drawn; Code and side by side', {}, async (h, page, url) => {
     mkdirSync(join(h.repo, 'docs'), { recursive: true });
     writeFileSync(join(h.repo, 'docs', 'other.md'), '# The other one\n');
+    // A "%" that is no escape (second bug hunt, 2026-11-19): decodeURI threw, and the whole page went with it.
+    writeFileSync(join(h.repo, 'docs', '50%.md'), '# Half\n');
     writeFileSync(
       join(h.repo, 'docs', 'guide.md'),
       [
         '# The guide',
         '',
         'Some **bold** and `code`, and [the other file](other.md).',
+        '',
+        'Half of it: [fifty](50%.md), and a picture ![odd](odd%zz.png).',
         '',
         '- one',
         '- [x] done',
@@ -2611,6 +2617,29 @@ try {
     await md.getByRole('link', { name: 'the other file' }).click();
     await page.locator('.wb-tab').filter({ hasText: 'other.md' }).waitFor({ timeout: 5_000 }).catch(() => undefined);
     t.check('a link to another file of the folder opens it', await page.locator('.wb-tab').filter({ hasText: 'other.md' }).count(), 1);
+    await page.locator('.wb-tab').filter({ hasText: 'guide.md' }).click();
+    await md.getByRole('link', { name: 'fifty' }).click();
+    await page.locator('.wb-tab').filter({ hasText: '50%.md' }).waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.check('a link with a "%" that is no escape: the page drawn, the file of that name opened', [await page.locator('.wb-tab').filter({ hasText: '50%.md' }).count(), await page.locator('.part-failed').count()], [1, 0]);
+
+    // Keys from where the operator is (second bug hunt, 2026-11-19): Ctrl+Shift+V did nothing from the file as it reads,
+    // and in the editor Monaco took Ctrl+K and Ctrl+L, so the palette and the chat did not open from there.
+    await page.locator('.ed-preview .md h1').filter({ hasText: 'Half' }).waitFor();
+    await page.locator('.ed-preview .md h1').filter({ hasText: 'Half' }).click();
+    await page.keyboard.press('Control+Shift+V');
+    await page.locator('.ed-code .ed-monaco[data-ready]').waitFor({ timeout: 30_000 }).catch(() => undefined);
+    t.check('Ctrl+Shift+V from the file as it reads: its text to edit', [await page.locator('.wb-file-pane:not([hidden]) .ed-code .ed-monaco').isVisible().catch(() => false), await page.locator('.wb-file-pane:not([hidden]) .ed-preview').count()], [true, 0]);
+    await page.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('dialog', { name: en['wb.palette']! });
+    await palette.waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.check('Ctrl+K in the editor: the palette', await palette.isVisible().catch(() => false), true);
+    await page.keyboard.press('Escape');
+    await palette.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => undefined);
+    await page.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+l');
+    await waitFor('the chat to take the keys', async () => page.evaluate(() => !!document.activeElement?.closest('.wb-chat')), 5_000).catch(() => undefined);
+    t.check('Ctrl+L in the editor: the chat, ready to write in', await page.evaluate(() => !!document.activeElement?.closest('.wb-chat')), true);
   });
 
   /*
@@ -2755,6 +2784,29 @@ try {
    * the project kept the name, level 2 and "for reference only" of the one before. Now each folder keeps its tabs and
    * edits in this browser; a file is saved only in the folder it was opened in; a folder opened is the project with its own.
    */
+  /*
+   * A file deleted or renamed under an edit (second bug hunt, 2026-11-19): the tab kept the old text with nothing said,
+   * and a save failed with "There is no file". Said now, the edit kept, and saved there again at a press.
+   */
+  await scenario('the editor: a file deleted under an edit is said, and saved there again', {}, async (h, page, url) => {
+    writeFileSync(join(h.repo, 'gone.ts'), 'export const g = 1;\n');
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'gone.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// mine');
+    await page.getByRole('tab', { name: /gone\.ts/ }).locator('.wb-unsaved').waitFor();
+    rmSync(join(h.repo, 'gone.ts'));
+    const notice = pane.locator('.ed-gone');
+    await notice.waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.check('deleted under the edit: said, the edit still there', [await notice.isVisible().catch(() => false), (await editorText(pane)).endsWith('// mine')], [true, true]);
+    await notice.getByRole('button', { name: en['ed.saveAgain']!, exact: true }).click();
+    await notice.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('saved there again, with the edit; the notice gone', [existsSync(join(h.repo, 'gone.ts')) ? readFileSync(join(h.repo, 'gone.ts'), 'utf8') : null, await notice.count()], ['export const g = 1;\n// mine', 0]);
+  });
+
   await scenario('the editor: an edit not saved survives Settings and a reload; each folder its own tabs; a file saved only where it was opened', {}, async (h, page, url) => {
     const a = h.repo;
     const b = join(h.base, 'other');
