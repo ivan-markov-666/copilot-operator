@@ -1233,7 +1233,7 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
     setOn(value);
     try {
       await track(
-        api.settings().then((s) => api.saveSettings({ ...s.raw, copilot: { ...((s.raw.copilot as Record<string, unknown>) ?? {}), [setting]: value } })),
+        api.updateSettings((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), [setting]: value } })),
       );
       setErr('');
     } catch (e) {
@@ -1260,7 +1260,7 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
 /** The groups, in order, and the locators of each, in order. */
 const CHAT_GROUPS: Array<{ group: ChatGroup; title: Key; keys: ChatKey[] }> = [
   { group: 'write', title: 'chatloc.group.write', keys: ['composer', 'send', 'userMessage'] },
-  { group: 'attach', title: 'chatloc.group.attach', keys: ['uploadInput', 'attachment', 'attachmentUploaded'] },
+  { group: 'attach', title: 'chatloc.group.attach', keys: ['uploadInput', 'attachment', 'attachmentUploaded', 'uploadError'] },
   { group: 'answer', title: 'chatloc.group.answer', keys: ['turn', 'answer', 'copy', 'stop'] },
   { group: 'conversations', title: 'chatloc.group.conversations', keys: ['conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] },
 ];
@@ -1324,19 +1324,22 @@ function ChatLocatorsSection() {
     field.focus();
   }, [saved, defaults]);
 
-  // One write at a time, each on the file as the last one left it (as the model menu's section writes).
+  // One write at a time, each on the file as the last one left it — with every other section's (api.updateSettings).
   const saveLocator = (key: ChatKey, value: string): Promise<void> => {
     const run = async () => {
       try {
-        const base = (await api.settings()).raw;
-        const copilot = { ...((base.copilot as Record<string, unknown>) ?? {}) };
-        const own = { ...((copilot.chatLocators as Record<string, string> | undefined) ?? {}) };
-        if (value.trim()) own[key] = value.trim();
-        else delete own[key];
-        if (Object.keys(own).length === 0) delete copilot.chatLocators;
-        else copilot.chatLocators = own;
         setMsg('');
-        await track(api.saveSettings({ ...base, copilot }));
+        await track(
+          api.updateSettings((base) => {
+            const copilot = { ...((base.copilot as Record<string, unknown>) ?? {}) };
+            const own = { ...((copilot.chatLocators as Record<string, string> | undefined) ?? {}) };
+            if (value.trim()) own[key] = value.trim();
+            else delete own[key];
+            if (Object.keys(own).length === 0) delete copilot.chatLocators;
+            else copilot.chatLocators = own;
+            return { ...base, copilot };
+          }),
+        );
         setMsg(t('loc.saved'));
         setErr('');
         // A locator changed is no longer the one that found nothing: its red goes with the next reading.
@@ -1476,10 +1479,8 @@ function ChatStepsSection({
   const write = (change: (copilot: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
     const run = async () => {
       try {
-        const base = (await api.settings()).raw;
-        const copilot = change({ ...((base.copilot as Record<string, unknown>) ?? {}) });
         setMsg('');
-        await track(api.saveSettings({ ...base, copilot }));
+        await track(api.updateSettings((base) => ({ ...base, copilot: change({ ...((base.copilot as Record<string, unknown>) ?? {}) }) })));
         setMsg(t('loc.saved'));
         setErr('');
         await failures.reload();
@@ -1740,9 +1741,8 @@ function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null
   const write = (change: (copilot: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
     const run = async () => {
       try {
-        const base = (await api.settings()).raw;
         setMsg('');
-        await track(api.saveSettings({ ...base, copilot: change({ ...((base.copilot as Record<string, unknown>) ?? {}) }) }));
+        await track(api.updateSettings((base) => ({ ...base, copilot: change({ ...((base.copilot as Record<string, unknown>) ?? {}) }) })));
         setMsg(t('loc.saved'));
         setErr('');
       } catch (e) {
@@ -2062,16 +2062,17 @@ function ExecutionSection() {
        * save through their own calls — the models, the projects — and a write built on the copy read
        * when the page opened put back whatever they had changed since.
        */
-      const base = await api
-        .settings()
-        .then((s) => s.raw)
-        .catch(() => rawRef.current as Record<string, unknown>);
-      const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
+      let next: Record<string, unknown> | null = null;
       setMsg('');
       try {
-        await track(api.saveSettings(next));
-        rawRef.current = next;
-        setRaw(next);
+        // In the page's one queue of settings writes (live test 2026-11-23), not only this section's.
+        await track(
+          api.updateSettings((base) => (next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } })),
+        );
+        if (next) {
+          rawRef.current = next;
+          setRaw(next);
+        }
         setMsg(t('exec.saved'));
         setErr('');
       } catch (e) {
@@ -2431,18 +2432,21 @@ function ProgramsSection() {
     setErr('');
     setMsg('');
     try {
-      const base = (await api.settings()).raw;
-      const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
-      if (programs === null) {
-        delete exec.allowedPrograms;
-        delete exec.readOnlyPrograms;
-        delete exec.runWithoutAsking;
-      } else {
-        exec.allowedPrograms = programs;
-        exec.readOnlyPrograms = readOnlyNext;
-        exec.runWithoutAsking = runNext;
-      }
-      await track(api.saveSettings({ ...base, execution: exec }));
+      await track(
+        api.updateSettings((base) => {
+          const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
+          if (programs === null) {
+            delete exec.allowedPrograms;
+            delete exec.readOnlyPrograms;
+            delete exec.runWithoutAsking;
+          } else {
+            exec.allowedPrograms = programs;
+            exec.readOnlyPrograms = readOnlyNext;
+            exec.runWithoutAsking = runNext;
+          }
+          return { ...base, execution: exec };
+        }),
+      );
       await read();
       setMsg(t('prog.saved', { n: (programs ?? defaults).length }));
       return true;
@@ -2614,11 +2618,14 @@ function ScriptsSection() {
     setErr('');
     setMsg('');
     try {
-      const base = (await api.settings()).raw;
-      const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
-      if (next === null) delete exec.scripts;
-      else exec.scripts = next;
-      await track(api.saveSettings({ ...base, execution: exec }));
+      await track(
+        api.updateSettings((base) => {
+          const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
+          if (next === null) delete exec.scripts;
+          else exec.scripts = next;
+          return { ...base, execution: exec };
+        }),
+      );
       await read();
       setMsg(t('scr.saved'));
     } catch (e) {

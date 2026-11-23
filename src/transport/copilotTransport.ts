@@ -12,7 +12,7 @@
  */
 import { buttonShows, normModel, pageModelFor, sameModel } from './modelMatch.js';
 import { chromium, type BrowserContext, type ElementHandle, type Page, type Locator } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
@@ -1102,6 +1102,8 @@ export class CopilotTransport {
     await look('uploadInput');
     notHere('attachment', 'attach');
     notHere('attachmentUploaded', 'attach');
+    // Copilot's bar of a refused upload shows only when an upload is refused.
+    notHere('uploadError', 'attach');
     // Stop shows only while Copilot writes.
     const stop = await count('stop');
     if (stop > 0) out.set('stop', { key: 'stop', status: 'found', count: stop });
@@ -2810,7 +2812,9 @@ Current URL: ${url}`);
     }
     await this.clearBlockers();
     await this.runSteps('message');
-    if (attachments.length > 0) await this.attach(attachments);
+    const refused = attachments.length > 0 ? await this.attach(attachments) : [];
+    // A file Copilot would not take, after its tries: its text goes in the message itself, said as such.
+    if (refused.length > 0) text = await this.withRefusedFiles(text, refused);
 
     const composer = this.composer();
     // The box, before it is clicked: none, its locator is said, rather than a minute's wait on the click.
@@ -2968,7 +2972,8 @@ Current URL: ${url}`);
    * Windows file dialog is ever involved. Waits until each chip's id carries the `SPO_`
    * prefix, which is the signal that the upload actually finished.
    */
-  async attach(paths: string[]): Promise<void> {
+  async attach(paths: string[]): Promise<string[]> {
+    const refused: string[] = [];
     /*
      * By the chat's locators in force (2026-11-17: the work page showed the attached file as a card of its own, and the
      * old `div.fx-Attachment[aria-label=<name>]`, written in the code, waited two minutes and ended the message with
@@ -2993,7 +2998,12 @@ Current URL: ${url}`);
         throw await this.locatorMissing('attachment', `after the file ${name} was put in the box's file input, within ${Math.round(this.attachWaitMs / 1000)} s`);
       }
       // Uploaded: the locator finds it, and goes on finding it for a moment (a spinner can come a little after the card).
-      const uploaded = await this.holds(async () => (await this.fileEl('attachmentUploaded', path).count().catch(() => 0)) > 0, this.uploadWaitMs, 2_000);
+      const uploaded = await this.uploadOrRefusal(path);
+      if (uploaded === 'refused') {
+        refused.push(path);
+        this.emit('attached', { name });
+        continue;
+      }
       if (!uploaded) {
         // As before: the message goes on (Send waits while it cannot be pressed); what found nothing is said once a window.
         this.emit('attachment-upload-unconfirmed', { name });
@@ -3004,12 +3014,91 @@ Current URL: ${url}`);
       }
       this.emit('attached', { name });
     }
+    return refused;
   }
+
+  /**
+   * Waits for an attached file to finish uploading — or for Copilot to say it refused it (live test 2026-11-23: "The
+   * upload service is busy right now. Wait a moment, then try again." showed at once, and the bot waited two minutes
+   * for an upload that had already failed, then sent the message without the file; Copilot, told to read it, asked for
+   * the same command again). A refusal is answered with the bar's own "Try again", up to `uploadRetriesMs.length`
+   * times, waiting longer each time so as not to press a busy service; still refused, 'refused'. True once uploaded;
+   * false when neither showed (the `attachmentUploaded` locator likely found nothing).
+   */
+  private async uploadOrRefusal(path: string): Promise<boolean | 'refused'> {
+    const name = path.split(/[\\/]/).pop() as string;
+    const bar = (): Locator => this.el('uploadError').filter({ visible: true }).first();
+    for (let attempt = 0; ; attempt++) {
+      const until = Date.now() + this.uploadWaitMs;
+      let since: number | null = null;
+      let refusal: string | null = null;
+      while (Date.now() < until) {
+        if (this.p.isClosed()) return false;
+        if ((await bar().count().catch(() => 0)) > 0) {
+          refusal = ((await bar().innerText({ timeout: 1_000 }).catch(() => '')) || 'the upload was refused').replace(/\s+/g, ' ').trim();
+          break;
+        }
+        if ((await this.fileEl('attachmentUploaded', path).count().catch(() => 0)) > 0) {
+          since ??= Date.now();
+          if (Date.now() - since >= 2_000) return true;
+        } else since = null;
+        await this.p.waitForTimeout(500);
+      }
+      if (refusal === null) return false;
+      const wait = this.uploadRetriesMs[attempt];
+      this.emit('attachment-upload-refused', { name, said: refusal.slice(0, 300), attempt: attempt + 1, ...(wait !== undefined ? { retryInSec: Math.round(wait / 1000) } : {}) });
+      if (wait === undefined) {
+        // Given up: the bar is closed, so it does not stand over the message that goes without the file.
+        await bar().locator('button[aria-label]').first().click({ timeout: 2_000 }).catch(() => undefined);
+        return 'refused';
+      }
+      // A Stop ends the wait: no more tries, and the message goes as it would after the last one.
+      const resume = Date.now() + wait;
+      while (Date.now() < resume && !this.stop?.aborted && !this.p.isClosed()) await this.p.waitForTimeout(Math.min(250, resume - Date.now()));
+      if (this.stop?.aborted || this.p.isClosed()) return 'refused';
+      // The bar's own "Try again": its button without a label of its own (the other one, labelled, dismisses it).
+      const again = bar().locator('button:not([aria-label])').first();
+      if (!(await again.click({ timeout: 2_000 }).then(() => true, () => false))) {
+        await bar().locator('button[aria-label]').first().click({ timeout: 2_000 }).catch(() => undefined);
+        return 'refused';
+      }
+      await this.p.waitForTimeout(1_000);
+    }
+  }
+
+  /**
+   * The message with the text of each file Copilot refused to upload put after it (live test 2026-11-23). The message
+   * still says "in the attached file"; the note says the file could not be attached and its text follows. Longer than
+   * `inlineRefusedMaxChars` together, each file keeps its start and its end, and says what was cut.
+   */
+  private async withRefusedFiles(text: string, files: string[]): Promise<string> {
+    const room = Math.max(2_000, this.inlineRefusedMaxChars - text.length);
+    const each = Math.floor(room / files.length);
+    const parts: string[] = [text];
+    for (const file of files) {
+      const name = file.split(/[\\/]/).pop() as string;
+      let body = await readFile(file, 'utf8').catch((e: unknown) => `(the file could not be read: ${(e as Error).message})`);
+      if (body.length > each) {
+        const head = Math.floor(each * 0.6);
+        const tail = each - head;
+        body = `${body.slice(0, head)}\n\n[… ${body.length - head - tail} characters cut here: the message has room for no more …]\n\n${body.slice(-tail)}`;
+      }
+      const fence = body.includes('```') ? '~~~~' : '```';
+      parts.push(`Copilot's upload service refused the file ${name} (it said the service was busy), so it is not attached: its text follows here instead.\n\n${fence}\n${body}\n${fence}`);
+      this.emit('attachment-inlined', { name, chars: body.length });
+    }
+    return parts.join('\n\n');
+  }
+
+  /** How long the text of refused files may make a message, all told (a field, for the checks). */
+  inlineRefusedMaxChars = 100_000;
 
   /** How long an attached file may take to show in the box, and to finish uploading (fields, for the checks). */
   inputWaitMs = 10_000;
   attachWaitMs = 30_000;
   uploadWaitMs = 120_000;
+  /** The waits before each "Try again" of an upload Copilot refused; one more refusal after the last, and it goes in the text. */
+  uploadRetriesMs = [15_000, 30_000, 60_000];
   /** How long Copilot's own chat page may show no box before its locator is said as the likely cause (a field, for the checks). */
   boxSuspectMs = 30_000;
 

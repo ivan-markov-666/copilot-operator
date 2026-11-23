@@ -307,7 +307,12 @@ function Terminal({ session, task }: { session?: Session; task?: Task }) {
   const steps: Array<Extract<StoryEntry, { kind: 'step' }>> = [];
   const walk = (es: StoryEntry[]): void => es.forEach((e) => (e.kind === 'step' ? steps.push(e) : e.kind === 'review' ? walk(e.entries) : undefined));
   walk(story?.entries ?? []);
-  if (steps.length === 0) return <p className="muted small wb-pad">{story ? t('wb.noSteps') : t('wb.loading')}</p>;
+  /*
+   * A task not started is never read (live test 2026-11-23: a message that waited to start left "Reading…" under the
+   * terminal for good): it ran nothing yet, and says so.
+   */
+  const unread = !task.startedAt && !live;
+  if (steps.length === 0) return <p className="muted small wb-pad">{story || unread ? t('wb.noSteps') : t('wb.loading')}</p>;
   return (
     <div ref={ref} className="wb-terminal" aria-live="off">
       {steps.map((s, i) => (

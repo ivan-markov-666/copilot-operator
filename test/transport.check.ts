@@ -1338,6 +1338,41 @@ try {
     shorten(f.transport);
     await f.transport.attach([file]);
     t.check("Settings' own locators, with {$file_stem}: used", [named(f.events, 'attached').length, named(f.events, 'locator-missing').length], [1, 0]);
+
+    /*
+     * Live test 2026-11-23: Copilot said "The upload service is busy right now. Wait a moment, then try again." in a bar
+     * over the box at once; the bot waited the whole two minutes for the file to show uploaded, said the
+     * `attachmentUploaded` locator found nothing, and sent the message without the file — which told Copilot to read
+     * it. Copilot asked for the same command again. The bar is `uploadError` now: its "Try again" pressed after a wait;
+     * refused every time, the file's text goes in the message itself.
+     */
+    const BAR =
+      "const bar = () => { const b = document.createElement('div'); b.setAttribute('role', 'alert'); b.innerHTML = '<span>The upload service is busy right now. Wait a moment, then try again.</span><button type=\"button\" class=\"again\">Try again</button><button type=\"button\" aria-label=\"Dismiss upload message\" class=\"dismiss\">x</button>'; " +
+      "b.querySelector('.dismiss').onclick = () => { window.dismissed = (window.dismissed || 0) + 1; b.remove(); }; " +
+      "b.querySelector('.again').onclick = () => { window.tries = (window.tries || 0) + 1; b.remove(); setTimeout(() => { if (window.tries >= (window.okAfter || 99)) document.getElementById('spin')?.remove(); else wrap.parentNode.insertBefore(bar(), wrap); }, 200); }; return b; }; " +
+      "wrap.parentNode.insertBefore(bar(), wrap);";
+    type Retries = { uploadRetriesMs: number[] };
+    const g = await fixture('attach-busy-once', `<div>${WRAP}${INPUT}</div></div><script>window.okAfter = 1;</script>${onPick(`${NEW_CARD} ${BAR}`)}`);
+    shorten(g.transport, { uploadWaitMs: 20_000 });
+    (g.transport as unknown as Retries).uploadRetriesMs = [300, 300, 300];
+    const startedG = Date.now();
+    const leftG = await g.transport.attach([file]);
+    t.check('refused once, then taken: "Try again" pressed once, the file attached, nothing left out', [await value<number>(g.page, 'tries'), leftG, named(g.events, 'attachment-upload-refused').map((e) => [e.detail?.attempt, e.detail?.retryInSec]), named(g.events, 'locator-missing').length], [1, [], [[1, 0]], 0]);
+    t.truthy('and not after the two minutes of an upload never seen: at once', Date.now() - startedG < 10_000, Date.now() - startedG);
+    t.truthy('what Copilot said is kept with it', String(named(g.events, 'attachment-upload-refused')[0]?.detail?.said ?? '').includes('The upload service is busy right now'), named(g.events, 'attachment-upload-refused')[0]?.detail);
+
+    const SEND_BOX =
+      '<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" role="textbox" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span>' +
+      `${INPUT}<button aria-label="Send" onclick="window.sentText = document.getElementById('m365-chat-editor-target-element').innerText">send</button></div>`;
+    const h = await fixture('attach-busy-always', `<div>${SEND_BOX}</div>${onPick(`${NEW_CARD} ${BAR}`)}`);
+    shorten(h.transport, { uploadWaitMs: 20_000 });
+    (h.transport as unknown as Retries).uploadRetriesMs = [200, 200, 200];
+    const startedH = Date.now();
+    await h.transport.send('The full output is in the attached file message-01-in-full.txt.', [file]);
+    const sentH = (await value<string>(h.page, 'sentText')) ?? '';
+    t.check('refused every time: three tries, then the bar closed and given up', [await value<number>(h.page, 'tries'), await value<number>(h.page, 'dismissed'), named(h.events, 'attachment-upload-refused').length, named(h.events, 'locator-missing').length], [3, 1, 4, 0]);
+    t.truthy("the message carries the file's text, said as not attached", sentH.startsWith('The full output is in the attached file') && sentH.includes("refused the file message-01-in-full.txt") && sentH.includes('the whole message'), sentH);
+    t.truthy('and went without the two minutes', Date.now() - startedH < 15_000, Date.now() - startedH);
   });
 
   // -------------------------------------------------------------------------------------------
@@ -1477,7 +1512,7 @@ try {
       'composer:found:1', 'send:found:1', 'userMessage:found:1', 'turn:found:2', 'answer:found:1', 'copy:found:1', 'stop:not-here:writing',
       'conversationLink:found:2', 'chatMore:found:1', 'renameItem:found:1', 'renameInput:not-here:dialog', 'renameSave:not-here:dialog',
       // The box's file input is there (hidden); an attached file shows only once one is, and the check attaches none.
-      'uploadInput:found:1', 'attachment:not-here:attach', 'attachmentUploaded:not-here:attach',
+      'uploadInput:found:1', 'attachment:not-here:attach', 'attachmentUploaded:not-here:attach', 'uploadError:not-here:attach',
     ]);
     t.check('only read: nothing sent, the letter for Send taken out, the menu closed, on the newest conversation', [await value<number>(a.page, 'sends'), await a.page.locator('#m365-chat-editor-target-element').innerText(), await a.page.locator('[role=menu]').count(), parseChatId(a.page.url())], [0, '', 0, A]);
     t.check('nothing said as missing', named(a.events, 'locator-missing').length, 0);

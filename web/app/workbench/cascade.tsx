@@ -724,7 +724,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         {/* In a chat Kerrigan directs, a message the operator wrote there is theirs to carry on; hers are in her conversation. */}
         {session && !running && !(session.directedBy && session.tasks.at(-1)?.fromKerrigan) && stoppedEarly(session.tasks.at(-1)) && (
           <div className="cs-system cs-carry" role="group" aria-label={t('chat.carryOnLabel')}>
-            <span className="grow">{t('chat.carryOnNote')}</span>
+            <span className="grow">{t(session.tasks.at(-1)!.status === 'queued' ? 'chat.notSentNote' : 'chat.carryOnNote')}</span>
             <button type="button" className="primary small" disabled={busy} onClick={() => void carryOn(session.tasks.at(-1)!)}>
               {t('chat.carryOn')}
             </button>
@@ -1048,7 +1048,7 @@ function Turn({ n, session, task, approvals, onDecided, onOpenFile, onRewind }: 
   return (
     <section className="cs-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
       <UserPrompt task={task} n={n} onRewind={onRewind} />
-      {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
+      {queuedLine(session, task) && <p className="muted small cs-system">{t(queuedLine(session, task)!)}</p>}
       <StoryLines entries={entries} />
       {/* The plan, once approved: what the work follows, folded under its heading. */}
       {task.plan?.approved && !approvals.some((a) => a.plan) && (
@@ -1137,6 +1137,21 @@ function Ending({ task }: { task: Task }) {
  * A message that stopped before it was done, which "Continue" carries on: stopped (the window closed past the times it is
  * opened again, Stop, the bot stopped), at a limit, or ended by a limit's count. As `isContinuable` in session/model.ts.
  */
+/**
+ * What a message not sent yet says under it (live test 2026-11-23): "Waiting for the message before it to finish" was
+ * said under the first message, while its own window opened and its model was chosen, with nothing before it; and
+ * "Waiting to start" under a message that had stopped, beside the note that says so. Now: waiting for another only
+ * when one before it is at work; starting, when none is; and nothing when it stopped unsent, which its note says.
+ */
+function queuedLine(session: Session, task: Task): 'chat.waitingTurn' | 'chat.starting' | 'chat.queued' | null {
+  if (task.status !== 'queued') return null;
+  if (session.status !== 'idle') {
+    const before = session.tasks.slice(0, session.tasks.findIndex((x) => x.id === task.id));
+    return before.some((x) => x.status === 'running' || x.status === 'waiting-approval') ? 'chat.waitingTurn' : 'chat.starting';
+  }
+  return session.tasks.at(-1)?.id === task.id && stoppedEarly(task) ? null : 'chat.queued';
+}
+
 function stoppedEarly(task: Task | undefined): boolean {
   if (!task) return false;
   /*
@@ -1318,7 +1333,7 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
   return (
     <section className="cs-turn cs-lead-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
       <UserPrompt task={task} n={n} onRewind={onRewind} />
-      {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
+      {queuedLine(session, task) && <p className="muted small cs-system">{t(queuedLine(session, task)!)}</p>}
       {rounds.map((r) => (
         <Fragment key={r.n}>
           {r.understanding && <LeadSays who={t('lead.understood')} text={r.understanding} />}
@@ -1444,7 +1459,7 @@ function KerriganTurn({ n, session, task, threads, approvals, onDecided, onOpenF
   return (
     <section className="cs-turn cs-kz-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
       <UserPrompt task={task} n={n} onRewind={onRewind} />
-      {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
+      {queuedLine(session, task) && <p className="muted small cs-system">{t(queuedLine(session, task)!)}</p>}
       {rounds.map((r, i) => (
         <Fragment key={`${r.at}-${i}`}>
           {r.understanding && <LeadSays who={t('kz.understood')} text={r.understanding} />}

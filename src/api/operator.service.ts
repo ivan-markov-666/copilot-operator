@@ -128,7 +128,9 @@ export const PARKED_RELEASED = 'Its card is closed now: "Continue" under its mes
 /** Said when "Continue" is pressed on a message answered on its card in the queue (2026-11-19). */
 export const PARKED_ALREADY_ANSWERED =
   'This card was answered already, on another page: the queue carries the task on with that answer. To stop it, use Stop on the queue\'s page.';
-export const PARKED_ANSWERED = "This message was answered on its card, and the queue carries it on with that answer: at the queue's next turn, or when the queue is run.";
+/** Why a message never sent was ended when the next one was written (live test 2026-11-23). */
+export const NEVER_SENT_SUPERSEDED = 'Never sent: the next message was written instead.';
+export const PARKED_ANSWERED ="This message was answered on its card, and the queue carries it on with that answer: at the queue's next turn, or when the queue is run.";
 export const RUN_ALL_REFUSED = (why: string): string => `"Run this and the rest" cannot be given here — ${why} Nothing was run: "Run" runs this step.`;
 
 /** Whether a folder is another, or inside it: Windows paths, as `sameFolder` reads them. */
@@ -2111,6 +2113,29 @@ export class OperatorService {
         if (skill) throw new Error(`A skill goes with a new message, and this one would be a note to the message at work. Send /${skill.name} when it has finished.`);
         await this.addTaskNote(session.id, atWork.id, text);
         return { threadId: session.id, taskId: atWork.id, noted: true, needsStart: false };
+      }
+      /*
+       * A message that was never sent (live test 2026-11-23): stopped on the model's card, it stayed queued, shown as
+       * stopped — and the next message's start ran it first, the new one left waiting behind it. A message written after
+       * it is what the operator wants now: the one before it is ended as stopped, never sent, and only Continue on the
+       * last message carries anything on. One set aside by the queue waits for its card and is left as it is.
+       */
+      if (!this.running.has(session.id) && !this.running.has(this.runKey(session.id))) {
+        const unsent = session.tasks.filter((t) => t.status === 'queued' && !t.parked);
+        if (unsent.length > 0) {
+          const at = new Date().toISOString();
+          session = await this.store.updateSession(session.id, (s) => {
+            for (const t of s.tasks) {
+              if (t.status !== 'queued' || t.parked) continue;
+              t.status = 'aborted';
+              t.finishedAt = at;
+              t.reason = NEVER_SENT_SUPERSEDED;
+            }
+          });
+          for (const t of unsent) {
+            this.bus.publish({ sessionId: session.id, taskId: t.id, type: 'task-superseded', level: 'info', message: `"${t.title}" was never sent; the next message was written instead` });
+          }
+        }
       }
     } else {
       const ws = await this.workspace();

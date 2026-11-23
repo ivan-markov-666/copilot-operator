@@ -1394,6 +1394,8 @@ async function call<T>(path: string, init?: RequestInit, opts: { timeoutMs?: num
  */
 export type SettingsSaved = { ok: true; running: number; now: string[]; next: string[]; window: string[] };
 const settingsSavedListeners = new Set<(saved: SettingsSaved) => void>();
+/** The last settings change under way on this page: the next one starts after it (`api.updateSettings`). */
+let settingsWrites: Promise<unknown> = Promise.resolve();
 /** Hears every save of the settings from this page, with what the work going on made of it. */
 export function onSettingsSaved(fn: (saved: SettingsSaved) => void): () => void {
   settingsSavedListeners.add(fn);
@@ -1433,6 +1435,21 @@ export const api = {
       for (const fn of settingsSavedListeners) fn(saved);
       return saved;
     }),
+  /**
+   * Changes the settings file and writes it back, one change at a time on this page (live test 2026-11-23: four boxes
+   * unticked quickly each read the file before the others had written it, and only the last one was kept). Every
+   * change reads the file as the change before it left it; `change` returns the whole new raw object, or null to write
+   * nothing. Every read-modify-write of the settings goes through here, whichever section it is in.
+   */
+  updateSettings: (change: (raw: Record<string, unknown>) => Record<string, unknown> | null): Promise<SettingsSaved | null> => {
+    const run = async (): Promise<SettingsSaved | null> => {
+      const next = change((await api.settings()).raw);
+      return next === null ? null : api.saveSettings(next);
+    };
+    const done = settingsWrites.then(run, run);
+    settingsWrites = done.catch(() => undefined);
+    return done;
+  },
 
   /** The base prompt as it ships: shown in Settings to read. */
   level1: () => call<{ content: string }>('/level1'),

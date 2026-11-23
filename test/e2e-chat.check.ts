@@ -311,9 +311,18 @@ try {
     ['session-stopped', 'the browser window was closed before the first task was sent; the tasks stay queued'],
   ]);
   t.check('and neither recorded as a start that failed', (await h.call<Failure[]>('GET', '/start/failures')).length, failuresBefore);
+  /*
+   * Live test 2026-11-23: a message stopped before it was sent stayed queued; the next message written ran it first,
+   * and the new one waited behind it. Now the message written after it is the one that runs, and the one never sent
+   * is ended as stopped, saying why.
+   */
+  const unsentId = thread.tasks.at(-1)!.id;
+  const next = await h.call<Sent>('POST', '/chat', { text: 'Something else instead.', threadId: sent.threadId });
   h.chat.script(reply.steps(looked), reply.done());
   thread = await h.run(sent.threadId);
-  t.check('started again, it opens a window and works', [thread.tasks.at(-1)?.status, h.chat.windows.length], ['done', 1]);
+  const unsent = thread.tasks.find((x) => x.id === unsentId);
+  t.check('a message written after one never sent: it runs, and the one before is ended unsent', [thread.tasks.find((x) => x.id === next.taskId)?.status, unsent?.status, unsent?.reason, h.chat.windows.length], ['done', 'aborted', 'Never sent: the next message was written instead.', 1]);
+  t.check('and the one never sent was never sent', [h.chat.sent.some((m) => m.text.includes('Look once more.')), h.chat.sent.some((m) => m.text.includes('Something else instead.'))], [false, true]);
   await h.stop();
   t.check('closed with the program, so every window opened was closed', [h.chat.windows.length, h.chat.opened, h.chat.closed], [0, h.chat.opened, h.chat.opened]);
   t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);

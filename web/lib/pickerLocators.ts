@@ -30,10 +30,11 @@ export type ChatKey =
   | 'renameSave'
   | 'uploadInput'
   | 'attachment'
-  | 'attachmentUploaded';
+  | 'attachmentUploaded'
+  | 'uploadError';
 export const CHAT_KEYS: ChatKey[] = [
   'composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave',
-  'uploadInput', 'attachment', 'attachmentUploaded',
+  'uploadInput', 'attachment', 'attachmentUploaded', 'uploadError',
 ];
 export type ChatGroup = 'write' | 'attach' | 'answer' | 'conversations';
 export const CHAT_ID = '{$chat_id}';

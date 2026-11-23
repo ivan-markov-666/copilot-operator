@@ -2756,6 +2756,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Как ботът вижда, че прикаченият файл е качен докрай, преди да изпрати; празно е стойността по подразбиране.',
           },
           {
+            key: 'chatloc.uploadError',
+            kind: 'field',
+            en: 'An upload refused',
+            bg: 'Отказано качване',
+            doesEn: 'Copilot\'s bar that a file was not uploaded: "Try again" up to 3 times, then its text goes in the message; empty is the default.',
+            doesBg: 'Лентата на Copilot, че файлът не е качен: „Try again“ до 3 пъти, после текстът му е в съобщението; празно е по подразбиране.',
+          },
+          {
             key: 'chatloc.turn',
             kind: 'field',
             en: 'Messages of the conversation',

@@ -652,7 +652,7 @@ try {
    * hand, so I don't have to come back here every time"): their defaults are what the bot looked for before, each has
    * its group in Settings and words a chatbot can find it by; the one template keeps its place for the id.
    */
-  t.check('the chat\'s locators, in Settings\' order', [...CHAT_LOCATOR_KEYS], ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave', 'uploadInput', 'attachment', 'attachmentUploaded']);
+  t.check('the chat\'s locators, in Settings\' order', [...CHAT_LOCATOR_KEYS], ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave', 'uploadInput', 'attachment', 'attachmentUploaded', 'uploadError']);
   t.check('their defaults: what the bot looked for before they were editable', DefaultChatLocators, {
     composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
     send: '[data-test-id="chat-input-wrapper"] >> role=button[name="Send"]',
@@ -670,6 +670,8 @@ try {
     uploadInput: '#upload-file-button',
     attachment: DefaultChatLocators.attachment,
     attachmentUploaded: DefaultChatLocators.attachmentUploaded,
+    // Added on purpose (live test 2026-11-23): Copilot's bar of a refused upload, by its dismiss button's label.
+    uploadError: '[role="alert"]:has(button[aria-label*="upload" i])',
   });
   t.check('each in a group, and each said in words', CHAT_LOCATOR_KEYS.filter((k) => !ChatLocatorGroupOf[k] || !ChatLocatorWhat[k]), []);
   // Every one kept when the settings are read (2026-11-17: the schema written by hand kept only the box's).
@@ -959,7 +961,8 @@ try {
   t.check('a blank entry covers nothing', [inScope('docs/x.md', ['']), inScope('docs/x.md', ['  '])], [false, false]);
   // An attached file's three locators (work, 2026-11-17: the old chip, written in the code, waited two minutes for a
   // card the page now shows differently, and the message ended with Playwright's words, terminal colours and all).
-  t.check('the attached file: three chat locators, in a group of their own', ['uploadInput', 'attachment', 'attachmentUploaded'].map((k) => [(CHAT_LOCATOR_KEYS as readonly string[]).includes(k), ChatLocatorGroupOf[k as 'attachment']]), [[true, 'attach'], [true, 'attach'], [true, 'attach']]);
+  // Four since the live test of 2026-11-23: Copilot's bar of a refused upload.
+  t.check('the attached file: four chat locators, in a group of their own', ['uploadInput', 'attachment', 'attachmentUploaded', 'uploadError'].map((k) => [(CHAT_LOCATOR_KEYS as readonly string[]).includes(k), ChatLocatorGroupOf[k as 'attachment']]), [[true, 'attach'], [true, 'attach'], [true, 'attach'], [true, 'attach']]);
   t.check('their defaults: the box\'s file input as before; the old chip by its label, and the new card by its text', [
     DefaultChatLocators.uploadInput,
     DefaultChatLocators.attachment.includes('div.fx-Attachment[aria-label="{$file_name}"]'),

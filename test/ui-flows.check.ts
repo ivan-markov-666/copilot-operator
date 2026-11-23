@@ -583,6 +583,50 @@ try {
   });
 
   /*
+   * Live test 2026-11-23, the first message stopped on the model's card: under it, while its window opened and the card
+   * waited, "Waiting for the message before it to finish" — with no message before it; stopped, "Waiting to start"
+   * beside the note that it had stopped, which said Copilot would be told how it stopped (it had never seen it); the
+   * terminal said "Reading…" for good. The next message then ran the stopped one, and showed nothing of it.
+   */
+  await scenario('a message stopped on the model card: said as starting, then as not sent; the next message runs, not it', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await page.goto(url('/'));
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.waitFor();
+    const chat = page.locator('.cs-body');
+    const banner = page.locator('.approval-banner');
+    await input.fill('First, never sent.');
+    await input.press('Enter');
+    await banner.getByText(en['approval.manualTitle']!).waitFor({ timeout: 30_000 });
+    const first = chat.locator('.cs-turn').first();
+    await first.getByText(en['chat.starting']!).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const whileCard = (await first.textContent()) ?? '';
+    t.check('while its window opens and the model is chosen: "starting", not "waiting for the message before it"', [whileCard.includes(en['chat.starting']!), whileCard.includes(en['chat.waitingTurn']!)], [true, false]);
+    await banner.getByRole('button', { name: en['approval.modelStop']!, exact: true }).click();
+    const carry = chat.locator('.cs-carry');
+    await carry.waitFor({ timeout: 30_000 });
+    await page.waitForTimeout(500);
+    const stopped = (await first.textContent()) ?? '';
+    t.check('stopped: no "Waiting to start" under it; the note says it was not sent, and Continue sends it', [stopped.includes(en['chat.queued']!), (await carry.textContent())?.includes(en['chat.notSentNote']!), (await carry.textContent())?.includes(en['chat.carryOnNote']!)], [false, true, false]);
+    const panelBody = page.locator('.wb-bottom-body');
+    await page.getByRole('tablist', { name: en['wb.panel']! }).getByRole('tab', { name: en['wb.terminal']! }).click();
+    await panelBody.getByText(en['wb.noSteps']!).waitFor({ timeout: 20_000 }).catch(() => undefined);
+    t.check('the terminal says it ran nothing, not "Reading…" for good', [((await panelBody.textContent()) ?? '').includes(en['wb.noSteps']!), ((await panelBody.textContent()) ?? '').includes(en['wb.loading']!)], [true, false]);
+
+    // The next message: it runs, and the one never sent stays unsent.
+    h.chat.script(reply.steps(write('second.txt', 'two')), reply.done('I wrote second.txt holding two and read it back to check it.'));
+    await input.fill('Second, the one wanted.');
+    await input.press('Enter');
+    await banner.getByText(en['approval.manualTitle']!).waitFor({ timeout: 30_000 }).catch(() => undefined);
+    h.chat.currentModel = 'GPT 5.6 Sol Think deeper';
+    await banner.getByRole('button', { name: en['approval.manualReady']!, exact: true }).click().catch(() => undefined);
+    await chat.getByText('I wrote second.txt holding two').waitFor({ timeout: 30_000 });
+    const sentNow = h.chat.sent.map((m) => m.text);
+    t.check('only the second went to Copilot', [sentNow.some((x) => x.includes('First, never sent.')), sentNow.some((x) => x.includes('Second, the one wanted.')), existsSync(join(h.repo, 'second.txt'))], [false, true, true]);
+    await first.getByText('Never sent: the next message was written instead.').waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.truthy('and the first says it was never sent', ((await first.textContent()) ?? '').includes('Never sent: the next message was written instead.'), await first.textContent());
+  });
+
+  /*
    * The Git view (2026-10-19: "let the Commits button show Git as VS Code does"): the open folder's changes, each file
    * with its letter, opening its two versions side by side in the editor; and the branch's commits, each opening to
    * its files, which open the same way.
@@ -1553,6 +1597,34 @@ try {
   });
 
   /*
+   * Live test 2026-11-23: the four "by hand" boxes unticked one after another, quickly — the page showed all four
+   * unticked, the file kept only the last. Each box read the file before the others had written it. The writes are held
+   * back here so that they overlap every time, as they did against the real API.
+   */
+  await scenario('Settings: four "by hand" boxes changed quickly are all four kept, whatever section they are in', {}, async (h, page, url) => {
+    await h.call('POST', '/models/refresh');
+    await page.goto(url('/settings'));
+    const ids = ['manual-model', 'manual-lead-model', 'manual-kerrigan-model', 'manual-review-model'];
+    for (const id of ids) await waitFor(`#${id} read`, async () => ((await page.locator(`#${id}`).isDisabled()) ? null : true), 10_000);
+    await page.route('**/api/settings', async (route) => {
+      if (route.request().method() === 'PUT') await new Promise((r) => setTimeout(r, 400));
+      await route.continue();
+    });
+    for (const id of ids) await page.locator(`#${id}`).check();
+    const all = async (): Promise<unknown[]> => {
+      const c = ((await settingsOf(h)).copilot ?? {}) as Record<string, unknown>;
+      return [c.manualModel, c.leadManualModel, c.kerriganManualModel, c.reviewManualModel];
+    };
+    await waitFor('the four saved', async () => ((await all()).every((x) => x === true) ? true : null), 10_000).catch(() => undefined);
+    await page.waitForTimeout(1_000);
+    t.check('the file has all four ticked', await all(), [true, true, true, true]);
+    await page.unroute('**/api/settings');
+    await page.reload();
+    for (const id of ids) await waitFor(`#${id} read again`, async () => ((await page.locator(`#${id}`).isDisabled()) ? null : true), 10_000);
+    t.check('and the page, read again, shows all four ticked', await Promise.all(ids.map((id) => page.locator(`#${id}`).isChecked())), [true, true, true, true]);
+  });
+
+  /*
    * The model menu's locators (operator, 2026-10-24: "an option in Settings to edit the general locators … help for each
    * value and how it can be found … an option to keep what the inspection finds"): five fields with their ⓘ and their
    * defaults shown; a locator checked as it is typed and not saved while something is wrong with it; a good one saved,
@@ -1624,8 +1696,8 @@ try {
     // Every locator the bot finds the chat by (2026-11-17, the same day): three groups, each field its ⓘ and its default.
     t.check("four groups, in order (an attached file's since the same evening)", await section.locator('.locator-group > h3').allTextContents(), [en['chatloc.group.write'], en['chatloc.group.attach'], en['chatloc.group.answer'], en['chatloc.group.conversations']]);
     const ids = await section.locator('input.picker-locator').evaluateAll((els) => els.map((e) => [e.id, (e as HTMLInputElement).placeholder]));
-    t.check('every locator, in order, each with its default shown', ids, (['composer', 'send', 'userMessage', 'uploadInput', 'attachment', 'attachmentUploaded', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] as const).map((k) => [`chat-${k}`, DefaultChatLocators[k]]));
-    t.check('each with its ⓘ', await section.locator('.picker-field .info-btn').count(), 15);
+    t.check('every locator, in order, each with its default shown', ids, (['composer', 'send', 'userMessage', 'uploadInput', 'attachment', 'attachmentUploaded', 'uploadError', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] as const).map((k) => [`chat-${k}`, DefaultChatLocators[k]]));
+    t.check('each with its ⓘ', await section.locator('.picker-field .info-btn').count(), 16);
     // An attached file's: its default (Playwright's :text-is in CSS) not refused; a template with neither of its places is.
     await page.locator('#chat-attachment').fill(DefaultChatLocators.attachment);
     t.check("an attached file's default, with Playwright's :text-is: not refused", await section.locator('.picker-field:has(#chat-attachment) .err').count(), 0);

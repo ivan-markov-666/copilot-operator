@@ -236,6 +236,7 @@ export const CHAT_LOCATOR_KEYS = [
   'uploadInput',
   'attachment',
   'attachmentUploaded',
+  'uploadError',
 ] as const;
 export type ChatLocatorKey = (typeof CHAT_LOCATOR_KEYS)[number];
 export type ChatLocators = Record<ChatLocatorKey, string>;
@@ -276,6 +277,13 @@ export const DefaultChatLocators: ChatLocators = {
     `div.fx-Attachment[aria-label="${FILE_NAME}"][id^="SPO_"], ` +
     `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_STEM}"), ` +
     `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_NAME}")`,
+  /*
+   * Copilot's own word that an upload failed (live test 2026-11-23): a red bar above the box, "The upload service is busy
+   * right now. Wait a moment, then try again.", with "Try again" and "Dismiss upload message". The bot waited two minutes
+   * for the file to show uploaded, then sent the message without it. Its bar: an alert whose dismiss button speaks of
+   * the upload.
+   */
+  uploadError: '[role="alert"]:has(button[aria-label*="upload" i])',
 };
 
 /** The groups Settings shows them in, in this order. */
@@ -296,6 +304,7 @@ export const ChatLocatorGroupOf: Record<ChatLocatorKey, ChatLocatorGroup> = {
   uploadInput: 'attach',
   attachment: 'attach',
   attachmentUploaded: 'attach',
+  uploadError: 'attach',
 };
 
 /**
@@ -318,6 +327,7 @@ export const ChatLocatorWhat: Record<ChatLocatorKey, string> = {
   uploadInput: 'the hidden file input (input type="file") of the box where a message is typed, through which files are attached to the message',
   attachment: `the file attached to the message, as the box shows it before Send (a card with the file's name); ${FILE_NAME} is where the file's name goes (message-01-in-full.txt), ${FILE_STEM} the name without its extension (message-01-in-full)`,
   attachmentUploaded: `the same attached file once it has finished uploading (no spinner or progress on it any more); ${FILE_NAME} is where the file's name goes, ${FILE_STEM} the name without its extension`,
+  uploadError: 'the bar Copilot shows near the box when an attached file could not be uploaded ("The upload service is busy right now…"), with its "Try again" button',
 };
 
 /**
@@ -354,6 +364,7 @@ export const ChatLocatorNear: Record<ChatLocatorKey, Array<ChatLocatorKey | Near
   uploadInput: ['composer', 'wrapper', 'send'],
   attachment: ['composer', 'wrapper', 'uploadInput'],
   attachmentUploaded: ['attachment', 'composer', 'wrapper'],
+  uploadError: ['wrapper', 'composer', 'attachment'],
 };
 /** For one of the operator's own steps, whose element can be anywhere: a dialog first (most are), then the box's area. */
 export const StepNear: Array<ChatLocatorKey | NearPlace> = ['dialog', 'wrapper', 'composer', 'main'];
@@ -375,6 +386,7 @@ export const ChatLocatorShows: Record<ChatLocatorKey, string> = {
   uploadInput: 'it is never on the screen: it is the hidden <input type="file"> near the box at the bottom, found in Elements with Ctrl+F and input[type="file"]',
   attachment: 'attach a file to the message with the box\'s attach button (a paper clip or a "+"): its card shows in the box',
   attachmentUploaded: 'attach a file to the message with the box\'s attach button (a paper clip or a "+") and wait until it has finished uploading (no spinner or progress on its card): the card as it is then is wanted',
+  uploadError: 'it shows only when Copilot refuses an upload — a red bar near the box, "The upload service is busy right now. Wait a moment, then try again." — and cannot be brought on purpose: find it in the page\'s HTML the bot kept when it showed',
 };
 
 /** The placeholder a template must hold; the others hold none. An attached file's: its name, or its name without the extension. */
