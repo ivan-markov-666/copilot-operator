@@ -37,7 +37,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { isContinuable, parkedOver, MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { isContinuable, parkedOver, MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type KerriganHow, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions, type CardHandle, type PlanAnswer, type QuestionAnswer } from '../orchestrator/taskRunner.js';
 import { Hold, WaitsFor } from '../orchestrator/hold.js';
@@ -779,6 +779,8 @@ export class OperatorService {
       /** Two chats: the worker's model, or by hand. */
       workerModel?: string;
       workerManualModel?: boolean;
+      /** Kerrigan directs: what the person fixed of how her messages run (2026-11-23); see `KerriganHow`. */
+      kerriganHow?: KerriganHow;
     },
   ): Promise<Session> {
     await this.init();
@@ -821,7 +823,19 @@ export class OperatorService {
       if (s.kerrigan && (patch.workerModel !== undefined || typeof patch.workerManualModel === 'boolean')) {
         const manual = typeof patch.workerManualModel === 'boolean' ? patch.workerManualModel : !!s.kerrigan.chatManualModel;
         const model = patch.workerModel !== undefined ? patch.workerModel.trim() : (s.kerrigan.chatModel ?? '');
-        s.kerrigan = { ...(manual ? { chatManualModel: true } : {}), ...(!manual && model ? { chatModel: model } : {}) };
+        s.kerrigan = { ...(manual ? { chatManualModel: true } : {}), ...(!manual && model ? { chatModel: model } : {}), ...(s.kerrigan.how ? { how: s.kerrigan.how } : {}) };
+      }
+      /*
+       * How her messages run, as the person fixes it (operator, 2026-11-23) — while she works too: read at each message
+       * she sends; two chats, at her next new chat.
+       */
+      if (s.kerrigan && patch.kerriganHow !== undefined) {
+        const how = kerriganHowOf(patch.kerriganHow);
+        if (how) s.kerrigan = { ...s.kerrigan, how };
+        else {
+          const { how: _gone, ...rest } = s.kerrigan;
+          s.kerrigan = rest;
+        }
       }
       // The same for the group: clearing it gives this session its conversation back. It does
       // not move the conversation it is already in; that history is where it is.
@@ -2083,7 +2097,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; reviewModel?: string; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string; kerrigan?: boolean; chatModel?: string; chatManualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; reviewModel?: string; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string; kerrigan?: boolean; chatModel?: string; chatManualModel?: boolean; kerriganHow?: KerriganHow; noSkill?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -2171,9 +2185,11 @@ export class OperatorService {
          * and the skill for each message she sends to a chat of its own. The model of those chats, as chosen beside hers.
          */
         if (input.kerrigan) {
+          const how = kerriganHowOf(input.kerriganHow);
           s.kerrigan = {
             ...(input.chatManualModel ? { chatManualModel: true } : {}),
             ...(!input.chatManualModel && input.chatModel?.trim() ? { chatModel: input.chatModel.trim() } : {}),
+            ...(how ? { how } : {}),
           };
           s.review = { enabled: false, model: '' };
           s.planMode = 'off';
@@ -2198,6 +2214,8 @@ export class OperatorService {
       level2: '',
       prompt: text,
       ...(skill ? { skill: { name: skill.name, description: skill.description, text: skill.text } } : {}),
+      // "No skill" for a message to Kerrigan (2026-11-23): every message she sends for it goes without one.
+      ...(!skill && input.noSkill && session.kerrigan ? { noSkill: true } : {}),
     });
     // The language the workbench is in, for what the chat's window says when the work has ended (`chatWindowNotice`).
     if (input.lang && session.lang !== input.lang) {
@@ -4532,3 +4550,13 @@ function resolveRunId(task: Task | undefined, requested?: string): string | null
   return owned.includes(requested) ? requested : null;
 }
 
+/** What the person fixed of how Kerrigan's messages run, kept only as it can be: each 'on' or 'off', or left to her. */
+export function kerriganHowOf(raw: unknown): KerriganHow | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const how: KerriganHow = {};
+  for (const key of ['planMode', 'twoChats', 'review'] as const) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (v === 'on' || v === 'off') how[key] = v;
+  }
+  return Object.keys(how).length > 0 ? how : undefined;
+}

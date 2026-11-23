@@ -1365,6 +1365,10 @@ button.linkish:hover { text-decoration: underline; }
 .cs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 1 auto; min-width: 0; }
 .cs-actions > button { white-space: nowrap; }
 .cs-plan-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; color: var(--ink); font-size: calc(12.5px * var(--scale)); white-space: nowrap; cursor: var(--cur-pointer); }
+.cs-kz-how { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.cs-kz-how-item { display: inline-flex; align-items: center; gap: 4px; margin: 0; white-space: nowrap; }
+.cs-kz-how-item select { min-width: 0; }
+.cs-kz-chips .badge.fixed { border-style: dashed; }
 .cs-plan { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--panel); }
 .cs-plan > summary { cursor: var(--cur-pointer); font-size: calc(13px * var(--scale)); color: var(--muted); }
 .cs-plan-ask .approval { margin: 0; }

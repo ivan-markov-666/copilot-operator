@@ -289,16 +289,30 @@ if (uncovered.size > 0) {
 }
 
 /*
- * Kerrigan's size: she is pasted into a chat, whose box has a limit (Copilot's refuses roughly 120 000
- * characters), or saved as a file and attached. A persona near that size is surely a mistake.
+ * Kerrigan's size, and how she reaches a chat (operator, 2026-11-23: "Kerrigan can be longer — the user must attach her
+ * as a file, not paste her into the chat's box; say so"). A chat's box refuses or cuts a text this long (Copilot's
+ * refused roughly 120 000 characters), so she is given as a file: the home screen's steps and the menu's messages say to
+ * save her and attach the file, never to paste her. A persona past FILE_LIMIT is surely a mistake.
  */
 console.log('\n--- Kerrigan, and how she reaches a chat ---');
-const PASTE_LIMIT = 100_000;
+const FILE_LIMIT = 400_000;
 let oversized = 0;
 for (const lang of ['en', 'bg'] as const) {
   const persona = kerriganPersona(lang, facts);
-  if (persona.length > PASTE_LIMIT) oversized += 1;
-  console.log(`${lang} Kerrigan                :`, persona.length, `chars; fails past ${PASTE_LIMIT}`);
+  if (persona.length > FILE_LIMIT) oversized += 1;
+  console.log(`${lang} Kerrigan                :`, persona.length, `chars; fails past ${FILE_LIMIT}`);
+}
+const asFile: Array<[string, boolean]> = [
+  ['en: step 1 saves her as a file', /\{save\}/.test(en['kerrigan.aboutStep1'] ?? '') && !/^[^{]*\{copy\}/.test(en['kerrigan.aboutStep1'] ?? '')],
+  ['bg: step 1 saves her as a file', /\{save\}/.test(bg['kerrigan.aboutStep1'] ?? '') && !/^[^{]*\{copy\}/.test(bg['kerrigan.aboutStep1'] ?? '')],
+  ['en: step 2 attaches the file, and says not to paste her', /attach the file/.test(en['kerrigan.aboutStep2'] ?? '') && /do not paste/.test(en['kerrigan.aboutStep2'] ?? '')],
+  ['bg: step 2 attaches the file, and says not to paste her', /прикачете файла/.test(bg['kerrigan.aboutStep2'] ?? '') && /не я поставяйте/.test(bg['kerrigan.aboutStep2'] ?? '')],
+  ['en: "Copied" points to the file', /Save as a file/.test(en['kerrigan.copied'] ?? '')],
+  ['bg: "Copied" points to the file', /Свали като файл/.test(bg['kerrigan.copied'] ?? '')],
+];
+for (const [what, ok] of asFile) {
+  if (!ok) oversized += 1;
+  console.log(`${ok ? 'ok' : '!!'} ${what}`);
 }
 
 /*

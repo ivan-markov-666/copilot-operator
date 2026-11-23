@@ -520,7 +520,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; reviewModel?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown; kerrigan?: unknown; chatModel?: unknown; chatManualModel?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; reviewModel?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown; kerrigan?: unknown; chatModel?: unknown; chatManualModel?: unknown; kerriganHow?: unknown; noSkill?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -544,6 +544,9 @@ export class OperatorController {
         ...(body.kerrigan === true ? { kerrigan: true } : {}),
         ...(typeof body.chatModel === 'string' && body.chatModel.trim() ? { chatModel: body.chatModel } : {}),
         ...(body.chatManualModel === true ? { chatManualModel: true } : {}),
+        // How her messages run, as the person fixed it (2026-11-23): checked by the service; and "no skill" for this one.
+        ...(body.kerriganHow && typeof body.kerriganHow === 'object' ? { kerriganHow: body.kerriganHow as never } : {}),
+        ...(body.noSkill === true ? { noSkill: true } : {}),
       })
       .catch(fail);
   }

@@ -1980,6 +1980,8 @@ function ExecutionSection() {
   const [questions, setQuestions] = useState<Questions>('ask');
   /** What Kerrigan gets when a chat's message ends (`execution.kerriganResult`, 2026-11-12). */
   const [kerriganResult, setKerriganResult] = useState<'copy' | 'exchange'>('copy');
+  /** When Kerrigan cannot decide by herself (`execution.kerriganAsks`, 2026-11-23): ask, decide herself, or the task fails. */
+  const [kerriganAsks, setKerriganAsks] = useState<'ask' | 'decide' | 'fail'>('ask');
   /** A subtask cut off for a technical reason (two chats, 2026-10-25): what is done, how many times, after how long. */
   const [subRetryMode, setSubRetryMode] = useState<SubtaskRetryMode>('ask');
   const [subRetries, setSubRetries] = useState(2);
@@ -2035,8 +2037,9 @@ function ExecutionSection() {
         setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run'; kerriganResult?: 'copy' | 'exchange' };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run'; kerriganResult?: 'copy' | 'exchange'; kerriganAsks?: string };
         setKerriganResult(exec.kerriganResult === 'exchange' ? 'exchange' : 'copy');
+        setKerriganAsks(exec.kerriganAsks === 'decide' || exec.kerriganAsks === 'fail' ? exec.kerriganAsks : 'ask');
         setWrittenScripts(exec.writtenScripts === 'run' ? 'run' : 'ask');
         setIsolation(exec.isolation ?? 'none');
         setStartMode(exec.mode ?? 'confirm');
@@ -2098,7 +2101,7 @@ function ExecutionSection() {
   const saveSubRetryWaitLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetryWaitSec', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts' | 'kerriganResult', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts' | 'kerriganResult' | 'kerriganAsks', value: string) => write('execution', key, value);
   const runChoice: RunChoice = startMode === 'confirm' ? 'confirm' : writtenScripts === 'run' ? 'unattended' : 'unattended-ask';
 
   /** The number fields, in the order a task meets them. */
@@ -2324,6 +2327,28 @@ function ExecutionSection() {
         >
           <option value="copy">{t('exec.kerriganResultCopy')}</option>
           <option value="exchange">{t('exec.kerriganResultExchange')}</option>
+        </select>
+      </Field>
+
+      {/*
+        When Kerrigan cannot decide by herself (operator, 2026-11-23: "it still waits for an answer from me very often —
+        the fewest interruptions; if it cannot finish the task, let it fail"): ask the person, as before; decide herself;
+        or end the task with her question in it, never waiting.
+      */}
+      <Field id="kerrigan-asks" label={t('exec.kerriganAsks')} info={t('exec.kerriganAsksWhy')}>
+        <select
+          id="kerrigan-asks"
+          value={kerriganAsks}
+          onChange={(e) => {
+            const v = e.target.value === 'decide' || e.target.value === 'fail' ? e.target.value : 'ask';
+            setKerriganAsks(v);
+            void saveExecution('kerriganAsks', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="ask">{t('exec.kerriganAsksAsk')}</option>
+          <option value="decide">{t('exec.kerriganAsksDecide')}</option>
+          <option value="fail">{t('exec.kerriganAsksFail')}</option>
         </select>
       </Field>
 

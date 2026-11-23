@@ -278,6 +278,15 @@ export const RunConfigSchema = z.object({
        */
       kerriganResult: z.enum(['copy', 'exchange']).default('copy'),
       /**
+       * When Kerrigan cannot decide by herself, in a conversation she directs (operator, 2026-11-23: "it still waits for an
+       * answer from me very often, which I find by asking another Copilot chat; only very rarely do I decide because the
+       * model cannot go on alone — I want the fewest interruptions; if it cannot finish, let the task fail"): `ask` — she
+       * asks the person, or leaves a card to them, and the work waits (as before); `decide` — she is never let ask: she
+       * decides herself, the way that keeps the most options open, and says the assumption; `fail` — a question only the
+       * person could answer ends the task at once as blocked, with her question in it, instead of waiting.
+       */
+      kerriganAsks: z.enum(['ask', 'decide', 'fail']).default('ask'),
+      /**
        * Plan mode, for every session that does not set its own (see `PlanMode` in session/model.ts): a
        * task's chat first looks at the project read-only and replies with a plan, and the work begins once
        * the plan is approved — by the runner (`auto`), or by the operator (`approve`, in a run that asks

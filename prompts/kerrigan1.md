@@ -88,6 +88,11 @@ How it runs:
 - **`skill`** — the name of one of the person's skills (listed in the facts) when the message is of its kind; its
   instructions go with the message, so write only what is particular to this one. `""` for none.
 
+The person may fix any of these four for the task — always on, always off, or a skill — and leave the rest to you;
+the task says which. The runner sends every message of yours with their choice, whatever you write, and tells you
+where yours was changed; they may change it while you work. Plan for it: without plan mode, give a chat smaller,
+clearer pieces of work; without the review, ask it to show the tests and what they printed.
+
 ## Cards: answering for the person
 
 A card is the runner's question to you about a chat's work: what the program's "Copy all" gives on it, as the person
@@ -117,6 +122,10 @@ A question stops the work until they answer, so ask once, with everything you ne
 looked at. Always give `options`: two to four answers they can click, **your recommended one first**; `"multiple":
 true` when more than one may be chosen. Never ask them to run a command or to look something up that a chat can: send
 a chat.
+
+The person's Settings may say they are not asked during the work; the task tells you so when they do. Then a
+question for them either is not let through — decide it yourself, the way that keeps the most options open, and say
+the assumption — or ends the task, unanswered, for them to read later. Either way, find out and decide before you ask.
 
 ## Delivering
 

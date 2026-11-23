@@ -37,6 +37,7 @@ import { operatorNotesSection } from '../session/compose.js';
 import { KERRIGAN_UNDERSTANDING_FIRST, kerriganFormatErrorMessage, parseKerriganReply, type KerriganReply } from '../protocol/kerriganSchema.js';
 import { cardCopyText, endingCopyText } from './cardText.js';
 import { chosenSaid } from './chosenAnswers.js';
+import { fixedByPerson, howSaid, type Fixing, type SkillFixed } from './kerriganChoices.js';
 import { runLeadTask } from './leadRunner.js';
 import {
   applySessionModel,
@@ -56,7 +57,7 @@ import {
   type RunDeps,
   type TaskOutcome,
 } from './taskRunner.js';
-import type { Acting, Actor, KerriganRecord, KerriganRound, PendingApproval, RetryChoice, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
+import type { Acting, Actor, KerriganHow, KerriganRecord, KerriganRound, PendingApproval, RetryChoice, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
 const RETRY_WORDS: Record<RetryChoice, string> = {
@@ -142,7 +143,7 @@ function fenced(text: string): string {
  * `sent`: the messages to chats a task carried on has sent already (second bug hunt, 2026-11-19), counted against the
  * same allowance; told only the allowance, she sent one more after using them all and was refused.
  */
-export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'continuing'>, n: number, facts: { maxSends: number; sent?: number; chat?: { name: string; title?: string } }, again: boolean): string {
+export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'noSkill' | 'continuing'>, n: number, facts: { maxSends: number; sent?: number; chat?: { name: string; title?: string }; how?: KerriganHow; asks?: KerriganAsks }, again: boolean): string {
   const sent = facts.sent ?? 0;
   return [
     again
@@ -160,12 +161,19 @@ export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'conti
      */
     ...(task.skill
       ? [
-          `The task is for the skill \`${task.skill.name}\`${task.skill.description ? ` (${task.skill.description})` : ''}: send every message of its kind with \`"skill": "${task.skill.name}"\`, and write in it only what is particular to the message — the skill's instructions go with it. Its instructions, as the bot sends them, so you know its phases, the result it leads to and what it needs:`,
+          `The person chose the skill \`${task.skill.name}\`${task.skill.description ? ` (${task.skill.description})` : ''} for this task: every message you send to a chat goes with it, \`"skill": "${task.skill.name}"\`, so write in each only what is particular to it — the skill's instructions go with it. Its instructions, as the bot sends them, so you know its phases, the result it leads to and what it needs:`,
           '',
           fenced(task.skill.text),
           '',
         ]
       : []),
+    /*
+     * How her messages run, as the person chose it under the box (operator, 2026-11-23): what they fixed, and what is
+     * hers to choose.
+     */
+    howSaid(facts.how, skillFixedOf(task)),
+    '',
+    ...(facts.asks && facts.asks !== 'ask' ? [asksSaid(facts.asks), ''] : []),
     sent > 0
       ? `You may send at most ${facts.maxSends} message(s) to chats for it; ${sent} went out before it stopped, so ${Math.max(0, facts.maxSends - sent)} are left.`
       : `You may send at most ${facts.maxSends} message(s) to chats for it.`,
@@ -177,6 +185,21 @@ export function kerriganTaskMessage(task: Pick<Task, 'prompt' | 'skill' | 'conti
   ]
     .filter((line, i) => i > 0 || line)
     .join('\n');
+}
+
+/** When she cannot decide by herself (Settings, `execution.kerriganAsks`, 2026-11-23). */
+export type KerriganAsks = 'ask' | 'decide' | 'fail';
+
+/** The person is not asked: what she is told at the start of a task. */
+export function asksSaid(asks: Exclude<KerriganAsks, 'ask'>): string {
+  return asks === 'decide'
+    ? 'The person is not asked during this task (their Settings): never reply "ask", and never leave a card to them — the runner does not let you. Find out what you can first (your contract, "Where to look"); what is still open, decide yourself, the way that keeps the most options open — the safest, most reversible choice a reasonable person in their place would make — and say the assumption in "notes", in "why" on a card, and in your report.'
+    : 'The person is not asked during this task (their Settings): a question for them ends the task at once, unanswered, marked blocked with your question for them to read later. So ask only when nothing else can settle it: find out first (your contract, "Where to look"), and decide yourself what a reasonable person in their place would, saying the assumption in "notes". A card only the person can answer: reply "ask" with "why" and "suggestion"; the chat is told to stop, and the task ends.';
+}
+
+/** The skill as the person chose it for their task: with every message, none, or hers to choose. */
+export function skillFixedOf(task: Pick<Task, 'skill' | 'noSkill'>): SkillFixed {
+  return task.skill ? { name: task.skill.name } : task.noSkill ? 'none' : undefined;
 }
 
 export async function runKerriganTask(transport: ChatTransport, session: Session, task: Task, deps: RunDeps): Promise<TaskOutcome> {
@@ -386,6 +409,26 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
   const lease = new WindowLease();
   /** Who is at work in the chat of hers at work now, for the line under her message. */
   let actorNow: Actor = 'worker';
+  /** When she cannot decide by herself (Settings, read each time: they take effect while she works). */
+  const asks = (): KerriganAsks => cfg.execution.kerriganAsks ?? 'ask';
+  /** A card only the person could answer, with the person not asked ("fail"): the task ends when the chat's work does. */
+  let needsPerson: { question: string; why: string; suggestion?: string } | null = null;
+  /** Stops the chat at work now, and only it (see `sendToChat`). */
+  let stopChat: (() => void) | null = null;
+  /** Her question, or a card's, as the task ends with it ("fail", 2026-11-23): for the person to read later. */
+  const endsForPerson = (q: { question: string; why?: string; suggestion?: string; options?: string[] }): { reason: string; summary: string } => ({
+    reason: `Kerrigan needed the person, who is not asked in this task (Settings): ${q.question}`,
+    summary: [
+      `Kerrigan stopped here: only you could decide this, and Settings say not to ask you during the work.`,
+      '',
+      `Question: ${q.question}`,
+      ...(q.why ? [`Why it is yours: ${q.why}`] : []),
+      ...(q.options && q.options.length > 0 ? [`Answers she offers: ${q.options.join(' / ')}`] : []),
+      ...(q.suggestion ? [`She would choose: ${q.suggestion}`] : []),
+      '',
+      'Answer it in a new message to her in this conversation: she goes on from where the work stopped.',
+    ].join('\n'),
+  });
   /** Her rounds of cards, one at a time. */
   let cards: Promise<void> = Promise.resolve();
   const chatName = async (sessionId: string): Promise<string> => {
@@ -490,6 +533,13 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       const message = await cardMessage(c);
       const r = await askHer(message, (x) => {
         if (x.status !== 'answer' && x.status !== 'ask') return 'A card is waiting: answer it with status "answer", or leave it to the person with status "ask", "why" and "suggestion".';
+        /*
+         * The person is not asked (Settings, 2026-11-23): "decide" — the card is hers to answer, and a plan always is, as
+         * approving it or sending it back is a choice she can make.
+         */
+        if (x.status === 'ask' && (asks() === 'decide' || (asks() === 'fail' && c.kind === 'plan'))) {
+          return 'The person is not asked in this task (their Settings): answer the card yourself, the way that keeps the most options open, and say the assumption in "why".';
+        }
         if (x.status === 'ask') return (x.why ?? '').trim() ? null : 'Leaving a card to the person needs "why": what makes it theirs alone, and what you looked at.';
         const a = answerOf(c, x);
         return 'problem' in a ? a.problem : null;
@@ -501,6 +551,23 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
         const a = answerOf(c, r) as { said: string; give: () => { ok: boolean; problem?: string } };
         round.card!.answer = a.said;
         give = a.give;
+      } else if (asks() === 'fail') {
+        /*
+         * Only the person could answer it, and they are not asked (Settings, 2026-11-23): the chat is told to stop and say
+         * so — its question with a stop, a subtask back to its lead — and the task ends blocked when the chat's work does,
+         * with her question in it, instead of waiting.
+         */
+        needsPerson = { question: round.card!.text, why: r.why!, ...(r.suggestion ? { suggestion: r.suggestion } : {}) };
+        round.card!.yours = { why: r.why!, ...(r.suggestion ? { suggestion: r.suggestion } : {}) };
+        const stop = `Stop here: only the person can decide this, and they are not asked in this task. Change nothing more; reply "blocked", saying what was done and what is needed: ${r.why!}`;
+        if (c.kind === 'question') {
+          round.card!.answer = stop;
+          give = () => c.card.answer({ text: stop }, r.why!);
+        } else if (c.kind === 'retry') {
+          round.card!.answer = `accept — ${RETRY_WORDS.accept}`;
+          give = () => c.card.answer('accept', r.why!);
+        }
+        sink.event('kerrigan-needs-person', { card: c.card.id }, `Kerrigan needs the person, who is not asked in this task: the chat is told to stop — ${r.why}`, 'warn');
       } else {
         round.card!.yours = { why: r.why!, ...(r.suggestion ? { suggestion: r.suggestion } : {}) };
         c.card.mark({ state: 'yours', at: new Date().toISOString(), why: r.why!, ...(r.suggestion ? { suggestion: r.suggestion } : {}) });
@@ -510,7 +577,13 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       const why = e instanceof FormatLimit ? `her replies could not be acted on (${e.message})` : (e as Error).message;
       round.status = 'ask';
       round.card!.yours = { why: `Kerrigan could not answer it: ${why}` };
-      if (!signal?.aborted) c.card.mark({ state: 'yours', at: new Date().toISOString(), why: round.card!.yours.why });
+      // The person not asked (2026-11-23): a question or a subtask is not left waiting for them; a plan still is.
+      if (asks() !== 'ask' && c.kind !== 'plan' && !signal?.aborted) {
+        needsPerson = { question: round.card!.text, why: round.card!.yours.why };
+        const stop = `Stop here: this could not be decided, and the person is not asked in this task. Change nothing more; reply "blocked", saying what was done and what is needed.`;
+        give = c.kind === 'question' ? () => c.card.answer({ text: stop }, why) : () => c.card.answer('accept', why);
+        round.card!.answer = c.kind === 'question' ? stop : `accept — ${RETRY_WORDS.accept}`;
+      } else if (!signal?.aborted) c.card.mark({ state: 'yours', at: new Date().toISOString(), why: round.card!.yours.why });
       sink.event('kerrigan-card-failed', { card: c.card.id, error: why }, `Kerrigan could not answer the card; it is left to the operator: ${why}`, 'warn');
     }
     // The chat's conversation given back before the chat goes on, whoever answers the card.
@@ -528,6 +601,8 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
     }
     if (give) {
       const done = give();
+      // The person not asked, and only they could answer (2026-11-23): the chat stops here, once the card is answered.
+      if (needsPerson) stopChat?.();
       round.card!.by = done.ok ? 'kerrigan' : 'operator';
       if (!done.ok) {
         delete round.card!.answer;
@@ -559,8 +634,9 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
   };
 
   /** The deps a chat of hers runs with: its cards that are hers go to her; its worker is its own. */
-  const chatDeps = (chatId: string): RunDeps => ({
+  const chatDeps = (chatId: string, chatSignal?: AbortSignal): RunDeps => ({
     ...deps,
+    ...(chatSignal ? { signal: chatSignal } : {}),
     directed: true,
     kerrigan: undefined,
     onWorker: (workerId, parent) => deps.onWorker?.(workerId, parent ?? chatId),
@@ -671,17 +747,18 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       return `"twoChats" is set when a chat begins: the chat you sent to last is ${lastChat.lead ? 'one of two chats' : 'one chat'}. Send with "twoChats": ${!!lastChat.lead}, or to a "new" chat.`;
     }
     const skill = (r.skill ?? '').trim();
-    if (skill && !(await deps.kerrigan?.skill(skill, chatDir))) return `There is no skill called "${skill}" for this folder: use one of the facts' list, or "".`;
+    if (skill && skill !== task.skill?.name && !(await deps.kerrigan?.skill(skill, chatDir))) return `There is no skill called "${skill}" for this folder: use one of the facts' list, or "".`;
     return null;
   };
 
   /** Her message to a chat, carried out there to its end; the result, as she is told it. */
-  const sendToChat = async (r: KerriganReply, round: KerriganRound): Promise<{ text: string; files: string[] } | 'stopped'> => {
+  const sendToChat = async (r: KerriganReply, round: KerriganRound, fixing?: Fixing): Promise<{ text: string; files: string[] } | 'stopped'> => {
     k.sent += 1;
     const n = k.sent;
     const chat = await chatFor(r, n);
     const title = (r.title ?? '').trim() || r.prompt!.split(/\r?\n/)[0]!.trim().slice(0, 80);
-    const skill = (r.skill ?? '').trim() ? await deps.kerrigan?.skill(r.skill!.trim(), chatDir) : null;
+    // The person's skill is the copy their task kept; one she chose, as it reads now.
+    const skill = !(r.skill ?? '').trim() ? null : task.skill && r.skill!.trim() === task.skill.name ? task.skill : await deps.kerrigan?.skill(r.skill!.trim(), chatDir);
     const made = await store.addTask(chat.id, { title, level2: '', prompt: r.prompt!, ...(skill ? { skill } : {}) });
     await store.updateTask(chat.id, made.id, (t) => {
       t.fromKerrigan = { sessionId: session.id, taskId: task.id, n };
@@ -696,6 +773,7 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       twoChats: !!chat.lead,
       review: !!chat.review?.enabled,
       ...(skill ? { skill: skill.name } : {}),
+      ...(fixing && fixing.fixed.length > 0 ? { fixed: fixing.fixed } : {}),
       sessionId: chat.id,
       taskId: made.id,
       status: 'running',
@@ -718,7 +796,15 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
     }
     const current = (await store.getSession(chat.id)) as Session;
     const its = current.tasks.find((x) => x.id === made.id) as Task;
-    const out = current.lead ? await runLeadTask(transport, current, its, chatDeps(chat.id)) : await runTask(transport, current, its, chatDeps(chat.id));
+    /*
+     * The chat's run may be stopped on its own (2026-11-23): a card only the person could answer, with the person not
+     * asked ("fail"), ends the chat's work at once — told to stop, a chat may just carry on — and then her task.
+     */
+    const chatStop = new AbortController();
+    stopChat = () => chatStop.abort();
+    const chatSignal = signal ? AbortSignal.any([signal, chatStop.signal]) : chatStop.signal;
+    const out = current.lead ? await runLeadTask(transport, current, its, chatDeps(chat.id, chatSignal)) : await runTask(transport, current, its, chatDeps(chat.id, chatSignal));
+    stopChat = null;
     // A card she was still on when the chat ended: her round of it is let finish before her conversation is used again.
     await cards;
     speakFor(transport, session.id);
@@ -828,17 +914,29 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
         s.contractSent = true;
       });
     }
-    const opening = kerriganTaskMessage(task, n || 1, { maxSends: maxSends(), ...(task.continuing && k.sent > 0 ? { sent: k.sent } : {}), ...(lastChat ? { chat: { name: lastChat.name.replace(/^chat: /, ''), ...(lastTitle ? { title: lastTitle } : {}) } } : {}) }, k.messages === 0 && !!session.chat);
+    const howNow = ((await store.getSession(session.id)) ?? session).kerrigan?.how;
+    const opening = kerriganTaskMessage(task, n || 1, { maxSends: maxSends(), ...(howNow ? { how: howNow } : {}), asks: asks(), ...(task.continuing && k.sent > 0 ? { sent: k.sent } : {}), ...(lastChat ? { chat: { name: lastChat.name.replace(/^chat: /, ''), ...(lastTitle ? { title: lastTitle } : {}) } } : {}) }, k.messages === 0 && !!session.chat);
     await record('THE TASK', opening);
     if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent to Kerrigan');
 
     /** Her next decision in the work: not an answer to a card, which only a card takes. */
     let understood = !!task.continuing;
+    const fixings = new WeakMap<KerriganReply, Fixing>();
     const decides = async (x: KerriganReply): Promise<string | null> => {
       if (x.status === 'answer') return 'No card is waiting for an answer now: reply with "send", "ask", "done" or "blocked".';
       if (!understood && !x.understanding) return KERRIGAN_UNDERSTANDING_FIRST;
       if (x.status === 'ask' && (x.question ?? '').trim().length < 10) return 'status "ask" needs a "question" for the person: what only they can decide, said in full, with "why" and "options".';
-      if (x.status === 'send') return await sendProblem(x);
+      if (x.status === 'send') {
+        /*
+         * What the person fixed (2026-11-23), read now — they may change it while she works — and put in her reply before
+         * it is checked: their choice is carried out whatever she wrote, never sent back to her as a mistake.
+         */
+        const how = (await store.getSession(session.id))?.kerrigan?.how;
+        const fixing = fixedByPerson(x, how, skillFixedOf(task), lastChat ? !!lastChat.lead : undefined);
+        Object.assign(x, fixing.reply);
+        fixings.set(x, fixing);
+        return await sendProblem(x);
+      }
       return null;
     };
     let r = await askHer(opening, decides);
@@ -867,14 +965,35 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
             r = await askHer(`You have sent the ${budget()} message(s) to chats you may for this task. Deliver what you have now — status "done" with your report, what is missing said plainly — or "blocked".`, async (x) => (x.status === 'send' ? 'No message to a chat is left: reply "done" or "blocked".' : await decides(x)));
             break;
           }
-          const ran = await sendToChat(r, round);
+          const fixing = fixings.get(r);
+          const ran = await sendToChat(r, round, fixing);
           if (ran === 'stopped') return await finish('aborted', 'stopped by the operator');
-          r = await askHer(ran.text, decides, ran.files);
+          if (needsPerson) {
+            const ends = endsForPerson(needsPerson);
+            round.report = ends.summary;
+            return await finish('blocked', ends.reason, ends.summary);
+          }
+          const changed = fixing && fixing.changed.length > 0 ? `The person's choices were applied to your message ${round.send?.n ?? ''}: ${fixing.changed.join('; ')}.\n\n` : '';
+          r = await askHer(`${changed}${ran.text}`, decides, ran.files);
           break;
         }
         case 'ask': {
+          // "She decides herself" (2026-11-23): her question is not let through, and not kept as one waiting.
+          if (asks() === 'decide') {
+            if (r.question) round.notes = [round.notes, `A question she was not let ask: ${r.question}`].filter(Boolean).join('\n');
+            await save();
+            r = await askHer('The person is not asked in this task (their Settings): decide it yourself, the way that keeps the most options open — the safest, most reversible choice a reasonable person in their place would make — say the assumption in "notes", and go on.', decides);
+            break;
+          }
           round.question = { text: r.question!, ...(r.why ? { why: r.why } : {}), options: r.options?.map(String) ?? [], ...(r.multiple ? { multiple: true } : {}) };
           await save();
+          // The person is not asked (Settings, 2026-11-23): she decides, or the task ends with her question in it.
+          if (asks() === 'fail') {
+            sink.event('kerrigan-needs-person', {}, `Kerrigan needs the person, who is not asked in this task: the task ends with her question — ${r.question}`, 'warn');
+            const ends = endsForPerson({ question: r.question!, ...(r.why ? { why: r.why } : {}), ...(r.suggestion ? { suggestion: r.suggestion } : {}), options: (r.options ?? []).map(String) });
+            round.report = ends.summary;
+            return await finish('blocked', ends.reason, ends.summary);
+          }
           if (!deps.askQuestion) {
             r = await askHer('Nobody can answer a question in this run: decide it yourself, the way that keeps the most options open, say the assumption in "notes", and go on.', decides);
             break;

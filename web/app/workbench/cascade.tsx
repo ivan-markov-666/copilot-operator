@@ -17,7 +17,7 @@
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, parkedOver, type HandoffOutcome, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
+import { api, parkedOver, type HandoffOutcome, type KerriganHow, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
 import type { Key } from '../../lib/lang/types';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
@@ -52,6 +52,20 @@ const REVIEW_KEY = 'cop.chat.review';
 const LEAD_KEY = 'cop.chat.lead';
 /** "Kerrigan directs" for the next new conversation (2026-11-12). */
 const KERRIGAN_KEY = 'cop.chat.kerrigan';
+/** How Kerrigan's messages run for the next new conversation she directs (2026-11-23), as JSON: what the person fixed. */
+const KERRIGAN_HOW_KEY = 'cop.chat.kerriganHow';
+/** What is kept of a `KerriganHow`: each 'on' or 'off', nothing else. */
+const howOf = (raw: unknown): KerriganHow => {
+  const how: KerriganHow = {};
+  if (!raw || typeof raw !== 'object') return how;
+  for (const key of ['planMode', 'twoChats', 'review'] as const) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (v === 'on' || v === 'off') how[key] = v;
+  }
+  return how;
+};
+/** The value of the skill picker that means "no skill" with Kerrigan: '' there is "Kerrigan chooses". */
+const NO_SKILL = '-';
 const keep = (key: string, value: string): void => {
   try {
     if (value) window.localStorage.setItem(key, value);
@@ -97,6 +111,14 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * the messages for chats of their own. The model of her chats is `newWorkerModel`'s picker under hers.
    */
   const [newKerrigan, setNewKerrigan] = useState(false);
+  /**
+   * How her messages run, for a conversation not started yet (operator, 2026-11-23: "let the user choose plan mode, two
+   * chats, the review, or none of them — or automatic, as Kerrigan judges"): each fixed on or off, or left to her. A
+   * started conversation keeps its own (`Session.kerrigan.how`), changeable while she works.
+   */
+  const [newHow, setNewHow] = useState<KerriganHow>({});
+  /** "No skill" chosen for the next message to Kerrigan: '' in the picker is hers to choose (2026-11-23). */
+  const [noSkill, setNoSkill] = useState(false);
   /** The worker's session of a two-chat conversation, whose tasks are the lead's subtasks. */
   const [worker, setWorker] = useState<Session | null>(null);
   const [text, setText] = useState('');
@@ -139,6 +161,11 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     setNewReview(kept(REVIEW_KEY) !== 'off');
     setNewLead(kept(LEAD_KEY) === 'on' && kept(KERRIGAN_KEY) !== 'on');
     setNewKerrigan(kept(KERRIGAN_KEY) === 'on');
+    try {
+      setNewHow(howOf(JSON.parse(kept(KERRIGAN_HOW_KEY) || '{}')));
+    } catch {
+      setNewHow({});
+    }
   }, []);
   useEffect(() => {
     if (composeAsk > 0) box.current?.focus();
@@ -297,7 +324,9 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       // Two chats, for a new conversation: the lead judges the worker's reports, so there is no review of its own.
       const two = fresh && newLead && !newKerrigan ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
       // Kerrigan directs (2026-11-12): she chooses plan mode, two chats and the review for each message she sends.
-      const directed = fresh && newKerrigan ? { chatModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, chatManualModel: newWorkerModel === BY_HAND } : undefined;
+      const directed = fresh && newKerrigan ? { chatModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, chatManualModel: newWorkerModel === BY_HAND, how: newHow } : undefined;
+      // "No skill" for a message to her (2026-11-23), only when no skill was chosen — by the picker or a "/name".
+      const withoutSkill = kerriganOn && noSkill && !chosen;
       const r = await api.chatSend(
         message,
         threadId || undefined,
@@ -310,10 +339,12 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         chosen || undefined,
         fresh && !two && !directed ? newReviewModel || undefined : undefined,
         directed,
+        withoutSkill,
       );
       setText('');
       // A skill goes with one message: the next one starts without, unless chosen again.
       setSkill('');
+      setNoSkill(false);
       choose(r.threadId);
       if (r.noted) {
         setSaid(t('chat.noted'));
@@ -406,11 +437,11 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * what the API refused goes back to what it holds. Shown only once the API had answered, a click on "Plan mode"
    * looked like it did nothing for as long as the write and the next read took (2026-10-20).
    */
-  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve'; review?: { enabled?: boolean; model?: string }; workerModel?: string; workerManualModel?: boolean }) => {
+  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve'; review?: { enabled?: boolean; model?: string }; workerModel?: string; workerManualModel?: boolean; kerriganHow?: KerriganHow }) => {
     if (!session) return;
     setSession((s) => {
       if (!s) return s;
-      const { review, workerModel, workerManualModel, ...rest } = patch;
+      const { review, workerModel, workerManualModel, kerriganHow, ...rest } = patch;
       return {
         ...s,
         ...rest,
@@ -421,8 +452,9 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           : {}),
         // Kerrigan's chats' model, by the same fields (2026-11-12).
         ...(s.kerrigan && (workerModel !== undefined || workerManualModel !== undefined)
-          ? { kerrigan: { chatManualModel: workerManualModel || undefined, chatModel: workerManualModel ? undefined : workerModel || undefined } }
+          ? { kerrigan: { ...s.kerrigan, chatManualModel: workerManualModel || undefined, chatModel: workerManualModel ? undefined : workerModel || undefined } }
           : {}),
+        ...(s.kerrigan && kerriganHow ? { kerrigan: { ...s.kerrigan, how: kerriganHow } } : {}),
       };
     });
     try {
@@ -469,6 +501,23 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       setNewLead(false);
       keep(LEAD_KEY, '');
     }
+  };
+  /**
+   * How her messages run (operator, 2026-11-23): each of plan mode, two chats and the review automatic — hers to choose
+   * for each message — or fixed on or off by the person. Of the conversation when there is one, changeable while she
+   * works (read at each message she sends; two chats, at her next new chat), else of the next one.
+   */
+  const howShown: KerriganHow = session ? howOf(session.kerrigan?.how) : newHow;
+  const chooseHow = async (key: keyof KerriganHow, value: string) => {
+    const next: KerriganHow = { ...howShown };
+    if (value === 'on' || value === 'off') next[key] = value;
+    else delete next[key];
+    if (!session) {
+      setNewHow(next);
+      keep(KERRIGAN_HOW_KEY, Object.keys(next).length > 0 ? JSON.stringify(next) : '');
+      return;
+    }
+    await changeSession({ kerriganHow: next });
   };
   // The worker's own; none chosen, Settings' model for the worker (2026-10-23), else the lead's, as the runner does.
   const workerModelShown = session
@@ -845,8 +894,29 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
               <label htmlFor="cs-skill" className="cs-pick-label">
                 {t('chat.skill')}
               </label>
-              <select id="cs-skill" value={skill} onChange={(e) => setSkill(e.target.value)} disabled={running} title={t('chat.skillWhy')} style={{ minWidth: 0, maxWidth: '60%' }}>
-                <option value="">{t('chat.skillNone')}</option>
+              {/*
+                With Kerrigan (2026-11-23): '' is hers to choose for each message she sends, "no skill" is the person's
+                choice of none, and a skill goes with every message she sends for this one.
+              */}
+              <select
+                id="cs-skill"
+                value={kerriganOn && noSkill ? NO_SKILL : skill}
+                onChange={(e) => {
+                  setNoSkill(e.target.value === NO_SKILL);
+                  setSkill(e.target.value === NO_SKILL ? '' : e.target.value);
+                }}
+                disabled={running}
+                title={kerriganOn ? t('kz.skillWhy') : t('chat.skillWhy')}
+                style={{ minWidth: 0, maxWidth: '60%' }}
+              >
+                {kerriganOn ? (
+                  <>
+                    <option value="">{t('kz.auto')}</option>
+                    <option value={NO_SKILL}>{t('chat.skillNone')}</option>
+                  </>
+                ) : (
+                  <option value="">{t('chat.skillNone')}</option>
+                )}
                 {skillsHere.map((k) => (
                   <option key={k.name} value={k.name} title={k.description || undefined}>
                     /{k.name}
@@ -879,7 +949,40 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             <input type="checkbox" checked={kerriganOn} disabled={running || !!session} onChange={(e) => chooseKerrigan(e.target.checked)} />
             <span>{t('chat.kerrigan')}</span>
           </label>
-          {/* Plan mode, two chats and the review are hers to choose for each message, with Kerrigan. */}
+          {/*
+            With Kerrigan (operator, 2026-11-23): plan mode, two chats and the review, each automatic — hers to choose for
+            each message — or fixed by the person; changeable while she works.
+          */}
+          {kerriganOn && (
+            <span className="cs-kz-how" role="group" aria-label={t('kz.howLabel')} title={t('kz.howWhy')}>
+              {(
+                [
+                  ['planMode', 'chat.planMode'],
+                  ['twoChats', 'chat.lead'],
+                  ['review', 'chat.review'],
+                ] as const
+              ).map(([key, label]) => {
+                // With two chats fixed on, the lead judges the work: there is no review of its own to choose.
+                const noReview = key === 'review' && howShown.twoChats === 'on';
+                return (
+                  <label key={key} className="cs-kz-how-item">
+                    <span className="cs-pick-label">{t(label)}</span>
+                    <select
+                      id={`cs-kz-${key}`}
+                      value={noReview ? 'off' : (howShown[key] ?? '')}
+                      disabled={noReview}
+                      title={noReview ? t('kz.reviewWithTwo') : undefined}
+                      onChange={(e) => void chooseHow(key, e.target.value)}
+                    >
+                      <option value="">{t('kz.auto')}</option>
+                      <option value="on">{t('kz.on')}</option>
+                      <option value="off">{t('kz.off')}</option>
+                    </select>
+                  </label>
+                );
+              })}
+            </span>
+          )}
           {!kerriganOn && (
             <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
               <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
@@ -1479,10 +1582,31 @@ function KerriganTurn({ n, session, task, threads, approvals, onDecided, onOpenF
               <p className="cs-who">{t('kz.send', { n: r.send.n, name: nameOf(r.send.sessionId) })}</p>
               <p className="cs-kz-chips">
                 <span className="badge">{r.send.chat === 'same' ? t('kz.sameChat') : t('kz.newChat')}</span>
-                {r.send.planMode && <span className="badge">{t('kz.planMode')}</span>}
-                {r.send.twoChats && <span className="badge">{t('kz.twoChats')}</span>}
-                {r.send.review && <span className="badge">{t('kz.review')}</span>}
-                {r.send.skill && <span className="badge skill">{t('chat.skillUsed', { name: r.send.skill })}</span>}
+                {/*
+                  What the person fixed is told from what she chose (2026-11-23): marked as theirs, and shown when off too.
+                */}
+                {(
+                  [
+                    ['planMode', 'kz.planMode'],
+                    ['twoChats', 'kz.twoChats'],
+                    ['review', 'kz.review'],
+                  ] as const
+                ).map(([key, label]) => {
+                  const fixed = !!r.send!.fixed?.includes(key);
+                  if (!r.send![key] && !fixed) return null;
+                  return (
+                    <span key={key} className={`badge${fixed ? ' fixed' : ''}`} data-fixed={fixed ? key : undefined} title={fixed ? t('kz.fixedWhy') : undefined}>
+                      {r.send![key] ? t(label) : t('kz.without', { what: t(label) })}
+                      {fixed && ` · ${t('kz.byYou')}`}
+                    </span>
+                  );
+                })}
+                {(r.send.skill || r.send.fixed?.includes('skill')) && (
+                  <span className={`badge skill${r.send.fixed?.includes('skill') ? ' fixed' : ''}`} data-fixed={r.send.fixed?.includes('skill') ? 'skill' : undefined} title={r.send.fixed?.includes('skill') ? t('kz.fixedWhy') : undefined}>
+                    {r.send.skill ? t('chat.skillUsed', { name: r.send.skill }) : t('chat.skillNone')}
+                    {r.send.fixed?.includes('skill') && ` · ${t('kz.byYou')}`}
+                  </span>
+                )}
               </p>
               <Folded>
                 <RichText text={r.send.prompt} />

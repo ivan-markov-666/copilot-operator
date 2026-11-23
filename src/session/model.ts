@@ -235,6 +235,12 @@ export type Task = {
    * this task was told. Sent with its opening; a worker's subtask carries its lead's.
    */
   skill?: TaskSkill;
+  /**
+   * Kerrigan directs (operator, 2026-11-23): the person chose "no skill" for this message of theirs, so every message she
+   * sends to a chat for it goes without one. With `skill` set instead, every one goes with that skill; neither, hers to
+   * choose.
+   */
+  noSkill?: boolean;
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -1185,9 +1191,9 @@ export type Session = {
    * Kerrigan directs this conversation (operator, 2026-11-12: "automate what I do by hand — Kerrigan in a third chat
    * writes the prompt, says plan mode, two chats, review, which skill, answers the bot's questions, judges the result"):
    * its conversation is hers, and the messages she writes go to chats of their own (`directedBy`). The model those chats
-   * work on, as chosen under the chat's box; none, Settings'.
+   * work on, as chosen under the chat's box; none, Settings'. `how`: what the person fixed of how her messages run.
    */
-  kerrigan?: { chatModel?: string; chatManualModel?: boolean };
+  kerrigan?: { chatModel?: string; chatManualModel?: boolean; how?: KerriganHow };
   /** A chat Kerrigan started and sends her messages to: her conversation's session. Shown in the list, under her. */
   directedBy?: string;
   /** The task of the queue this chat ran (2026-10-24): `QueueItem.id` in data/queue.json. */
@@ -1433,6 +1439,15 @@ export type KerriganOnCard = { state: 'thinking' | 'yours'; at: string; why?: st
  * last to — with the settings it goes with; `answer`: a card of the chat, answered in the operator's place; `ask`: a
  * question for the operator, or a card left to them; `done`: her report; `blocked`: why it cannot go on.
  */
+/**
+ * How Kerrigan's messages run, as the person fixed it (operator, 2026-11-23: "let the user choose how the task is
+ * developed — plan mode, two chats, review, or none of them — and an automatic mode, as Kerrigan judges"). Each left out
+ * is hers to choose for each message (automatic); `'on'` / `'off'` is the person's, and the runner sends with it
+ * whatever she writes. Two chats is how a chat begins: a change reaches the next new chat she sends to.
+ */
+export type KerriganFixed = 'on' | 'off';
+export type KerriganHow = { planMode?: KerriganFixed; twoChats?: KerriganFixed; review?: KerriganFixed };
+
 export type KerriganRound = {
   status: 'send' | 'answer' | 'ask' | 'done' | 'blocked';
   at: string;
@@ -1451,6 +1466,8 @@ export type KerriganRound = {
     twoChats: boolean;
     review: boolean;
     skill?: string;
+    /** Which of the four the person fixed (2026-11-23), so the page tells their choice from hers. */
+    fixed?: Array<'planMode' | 'twoChats' | 'review' | 'skill'>;
     /** The chat's session and the task the message is, once made; how it ended, and its summary. */
     sessionId?: string;
     taskId?: string;

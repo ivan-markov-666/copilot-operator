@@ -479,4 +479,151 @@ await scenario('a message the person writes into a chat she directs, stopped, is
   t.check('"Continue" carries it on there, to the end', [carried.status, (await chatOf(h, chatId)).tasks.at(-1)?.status, existsSync(join(h.repo, 'mine.txt'))], [201, 'done', true]);
 });
 
+/*
+ * The person fixes how her messages run (operator, 2026-11-23: "let the user choose plan mode, two chats, the review, or
+ * none of them — or automatic, as Kerrigan judges"; "the skill too"; "a change while she works reaches the next new
+ * chat"). What they fixed is carried out whatever she writes, never sent back to her as a mistake; she is told it at the
+ * start and where hers was changed; the page tells their choice from hers.
+ */
+await scenario('what the person fixed is carried out whatever she writes: plan mode, two chats, the review, the skill; changed between messages', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e, one file per page.', projectDir: '' }] });
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper', kerriganHow: { planMode: 'off', twoChats: 'off', review: 'off', bogus: 'on' }, skill: 'new-test' });
+  t.check('the conversation keeps what the person fixed, and nothing else', (await sessionOf(h, sent.threadId)).kerrigan, { chatModel: 'Think deeper', how: { planMode: 'off', twoChats: 'off', review: 'off' } });
+  let opening = '';
+  let result = '';
+  h.chat.script(
+    (m) => {
+      opening = m.text;
+      // All four the other way: plan mode, two chats, the review, no skill.
+      return reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt', planMode: true, twoChats: true, review: true, skill: '' });
+    },
+    reply.steps(write('result.txt', 'hello'), 'Get-Content result.txt'),
+    reply.done('I wrote result.txt with Set-Content; Get-Content prints hello.'),
+    (m) => {
+      result = m.text;
+      return reply.kerrigan.done();
+    },
+  );
+  t.check('it starts', (await h.call<{ started: boolean }>('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' })).started, true);
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('done', job.status, 'done');
+  t.truthy('her task says what the person fixed, and that the runner holds to it', opening.includes('The person fixed how your messages run for this task: `planMode` always off; `twoChats` always off; `review` always off; the skill `new-test` with every message.') && opening.includes('The person chose the skill `new-test`'), opening);
+  const send = job.kerrigan!.rounds.find((r) => r.send)!.send! as Round['send'] & { fixed?: string[] };
+  t.check('her message went as the person chose, all four marked theirs', [send.planMode, send.twoChats, send.review, send.skill, send.fixed], [false, false, false, 'new-test', ['planMode', 'twoChats', 'review', 'skill']]);
+  const chat = (await h.call<ChatSession & { tasks: Array<{ skill?: { name: string } }> }>('GET', `/sessions/${send.sessionId}`));
+  t.check('the chat itself: one chat, no plan, no review, the skill on its message', [chat.planMode, !!chat.lead, chat.review?.enabled, chat.tasks[0]?.skill?.name], ['off', false, false, 'new-test']);
+  t.truthy('no reply of hers was sent back for it', !h.chat.sent.some((m) => m.text.includes('Nothing from your last reply was acted on')), '');
+  t.truthy('she is told where hers was changed', result.startsWith('The person\'s choices were applied to your message 1: "planMode": false (you wrote true); "twoChats": false (you wrote true); "review": false (you wrote true); "skill": "new-test" (you wrote "")'), result.slice(0, 400));
+
+  // Changed between her messages: all to her but two chats, fixed on; and no skill for the next message.
+  const changed = await h.call<KSession>('PUT', `/sessions/${sent.threadId}`, { kerriganHow: { twoChats: 'on' } });
+  t.check('changed on the conversation, its model kept', changed.kerrigan, { chatModel: 'Think deeper', how: { twoChats: 'on' } });
+  let next = '';
+  let result2 = '';
+  h.chat.script(
+    (m) => {
+      next = m.text;
+      // "same" with two chats, which on her own would be sent back: the chat she carries on is one chat.
+      return reply.kerrigan.send('Read result.txt back once more and report what it prints.', { understanding: 'Goal: read result.txt back.', chat: 'same', twoChats: true, skill: 'new-test', title: 'Read it back' });
+    },
+    reply.steps('Get-Content result.txt'),
+    reply.done('I read result.txt back with Get-Content; it prints hello, as the message asked.'),
+    (m) => {
+      result2 = m.text;
+      return reply.kerrigan.done('result.txt holds hello; the chat read it back.');
+    },
+  );
+  await h.call('POST', '/chat', { text: 'Check that result.txt still holds hello.', threadId: sent.threadId, noSkill: true });
+  t.check('the next message starts', (await h.call<{ started: boolean }>('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' })).started, true);
+  await h.idle();
+  const job2 = (await sessionOf(h, sent.threadId)).tasks[1]!;
+  t.check('done too', job2.status, 'done');
+  t.truthy('her next task says what is fixed now, and what is hers', next.includes('`twoChats` always on; no skill (`"skill": ""`)') && next.includes('Yours to choose for each message: `planMode`, `review`.'), next);
+  const send2 = job2.kerrigan!.rounds.find((r) => r.send)!.send! as Round['send'] & { fixed?: string[] };
+  t.check('"same" is not refused: the chat keeps how it began, without the skill', [send2.chat, send2.sessionId === send.sessionId, send2.twoChats, send2.skill, send2.fixed], ['same', true, false, undefined, ['twoChats', 'skill']]);
+  const chat2 = await h.call<ChatSession & { tasks: Array<{ skill?: { name: string } }> }>('GET', `/sessions/${send.sessionId}`);
+  t.check('still one chat; its second message without a skill', [!!chat2.lead, chat2.tasks[1]?.skill], [false, undefined]);
+  t.truthy('she is told the chat stays one chat, and two chats is for her next new one', result2.includes('the chat you carry on is one chat, and stays so') && result2.includes('the person chose "twoChats": true: it is how your next "new" chat begins') && result2.includes('"skill": "" (you wrote "new-test")'), result2.slice(0, 500));
+  await h.call('PUT', '/skills', { skills: [] });
+});
+
+/*
+ * When Kerrigan cannot decide by herself (operator, 2026-11-23: "with Kerrigan directs it still waits for an answer from
+ * me very often, which I find by asking another Copilot chat; the fewest interruptions — if it cannot finish the task,
+ * let it fail"). Settings' `execution.kerriganAsks`: "fail" ends the task as blocked with her question instead of
+ * waiting — her own question, or a chat's card she would leave to the person, the chat told to stop first; "decide"
+ * never lets her ask. Nothing waits on the person either way.
+ */
+await scenario('"the task stops": her own question ends the task as blocked, with it; nothing waits', { execution: { mode: 'unattended', isolation: 'none-accepted', kerriganAsks: 'fail' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let opening = '';
+  h.chat.script((m) => {
+    opening = m.text;
+    return reply.kerrigan.ask({ understanding: 'Goal: result.txt holding hello.', question: 'Should result.txt go to the root of the repository or to the docs folder?', why: 'The task does not say, and the mail and the files say nothing of it.', options: ['The root', 'The docs folder'], suggestion: 'The root' });
+  });
+  t.check('it starts', (await h.call<{ started: boolean }>('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' })).started, true);
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.truthy('her task says a question ends it', opening.includes('a question for them ends the task at once, unanswered'), opening.slice(-900));
+  t.check('the task ended blocked, with her question in its reason', [job.status, job.reason?.includes('Should result.txt go to the root of the repository or to the docs folder?')], ['blocked', true]);
+  t.truthy('its summary: the question, why, the answers and what she would choose', !!job.summary && job.summary.includes('Why it is yours: The task does not say') && job.summary.includes('Answers she offers: The root / The docs folder') && job.summary.includes('She would choose: The root'), job.summary ?? '');
+  t.check('nothing waits for the person', (await pending(h, sent.threadId)).length, 0);
+});
+
+await scenario('"the task stops": a card she leaves to the person tells the chat to stop, and the task ends blocked when it has', { execution: { mode: 'unattended', isolation: 'none-accepted', kerriganAsks: 'fail' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    reply.ask('May I delete the old result.txt that another team keeps there?', ['Delete it', 'Keep it'], 'it belongs to another team'),
+    reply.kerrigan.ask({ why: 'Deleting another team\'s file cannot be undone, and nothing says it may be.', suggestion: 'Keep it' }),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  const send = job.kerrigan!.rounds.find((r) => r.send)!.send!;
+  const theChat = (await chatOf(h, send.sessionId!)).tasks[0]!;
+  t.check('the chat\'s work was stopped there, nothing more done', [theChat.status, existsSync(join(h.repo, 'result.txt'))], ['aborted', false]);
+  t.check('the task ended blocked with the card\'s question; she was not asked again', [job.status, job.reason?.includes('May I delete the old result.txt'), h.chat.sent.filter((m) => m.contract === undefined && m.text.includes('The result of your message')).length], ['blocked', true, 0]);
+  t.check('nothing waits for the person', (await pending(h, sent.threadId)).length, 0);
+  const card = job.kerrigan!.rounds.find((r) => r.card)!.card!;
+  t.check('the card is on her record as left to the person, answered with the stop', [card.yours?.suggestion, card.by, card.answer?.startsWith('Stop here')], ['Keep it', 'kerrigan', true]);
+  h.chat.script();
+});
+
+await scenario('"she decides herself": her question and a card left to the person are not let through; she decides, and the work goes on', { execution: { mode: 'unattended', isolation: 'none-accepted', kerriganAsks: 'decide' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let opening = '';
+  let toldToDecide = '';
+  let refusedCard = '';
+  h.chat.script(
+    (m) => {
+      opening = m.text;
+      return reply.kerrigan.ask({ understanding: 'Goal: result.txt holding hello.', question: 'Root or docs folder?', why: 'The task does not say.', options: ['Root', 'Docs'] });
+    },
+    (m) => {
+      toldToDecide = m.text;
+      return reply.kerrigan.send(undefined, { notes: 'Assumed the root: the task names no folder.', title: 'Write result.txt' });
+    },
+    reply.ask('Overwrite result.txt if it is there already?', ['Overwrite it', 'Keep the old one'], 'it may be there'),
+    reply.kerrigan.ask({ why: 'It may be the person\'s own file.', suggestion: 'Overwrite it' }),
+    (m) => {
+      refusedCard = m.text;
+      return reply.kerrigan.answer({ option: 1, why: 'Assumed: the task asks for the file to hold hello, so it is overwritten.' });
+    },
+    reply.steps(write('result.txt', 'hello'), 'Get-Content result.txt'),
+    reply.done('I wrote result.txt with Set-Content and read it back with Get-Content: it holds hello.'),
+    reply.kerrigan.done('Done: result.txt holds hello. Assumed the root of the project, and overwriting the file there.'),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.truthy('her task says she is never let ask', opening.includes('never reply "ask", and never leave a card to them'), opening.slice(-900));
+  t.truthy('her question is not let through: she is told to decide', toldToDecide.startsWith('The person is not asked in this task (their Settings): decide it yourself'), toldToDecide);
+  t.truthy('a card left to the person is sent back: hers to answer', refusedCard.includes('answer the card yourself, the way that keeps the most options open'), refusedCard.slice(0, 400));
+  t.check('the work went on to the end', [job.status, readFileSync(join(h.repo, 'result.txt'), 'utf8').trim()], ['done', 'hello']);
+  t.check('nothing waited for the person: no question of hers, no card left', job.kerrigan!.rounds.filter((r) => r.question || r.card?.yours).length, 0);
+  t.truthy('the question she was not let ask is on her record', job.kerrigan!.rounds.some((r) => (r.notes ?? '').includes('A question she was not let ask: Root or docs folder?')), JSON.stringify(job.kerrigan!.rounds.map((r) => r.notes)));
+});
+
 t.finish();

@@ -139,6 +139,7 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   fromKerrigan: 'kept',
   // The kind of task it is: every attempt is sent with the same skill.
   skill: 'kept',
+  noSkill: 'kept',
   interruption: 'cleared',
   // Who was at work when the attempt ended, had it not ended cleanly: never the next attempt's.
   acting: 'cleared',
@@ -412,6 +413,8 @@ export class SessionStore {
       scope?: string[];
       outputs?: string[];
       skill?: TaskSkill;
+      /** Kerrigan directs: the person chose "no skill" for this message (2026-11-23). */
+      noSkill?: boolean;
     },
   ): Promise<Task> {
     const vcsPlan = tidyVcsPlan(input.vcsPlan);
@@ -436,6 +439,7 @@ export class SessionStore {
       ...((input.scope ?? []).filter((p) => p.trim()).length > 0 ? { scope: (input.scope ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
       ...((input.outputs ?? []).filter((p) => p.trim()).length > 0 ? { outputs: (input.outputs ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
       ...(input.skill ? { skill: { name: input.skill.name, description: input.skill.description, text: input.skill.text } } : {}),
+      ...(!input.skill && input.noSkill ? { noSkill: true } : {}),
     };
     await this.updateSession(sessionId, (s) => {
       s.tasks.push(task);

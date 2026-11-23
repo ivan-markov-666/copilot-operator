@@ -2552,6 +2552,12 @@ try {
     await kerriganResult.selectOption('exchange');
     await waitFor('the choice to be saved', async () => ((await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult === 'exchange') || null, 10_000).catch(() => undefined);
     t.check('the whole exchange, when chosen, saved', (await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult, 'exchange');
+    // When Kerrigan cannot decide by herself (2026-11-23): she asks, by default; or decides herself; or the task stops.
+    const kerriganAsks = page.locator('#kerrigan-asks');
+    t.check('when Kerrigan cannot decide: she asks, by default', [await kerriganAsks.inputValue(), await kerriganAsks.locator('option').allTextContents()], ['ask', [en['exec.kerriganAsksAsk'], en['exec.kerriganAsksDecide'], en['exec.kerriganAsksFail']]]);
+    await kerriganAsks.selectOption('fail');
+    await waitFor('the choice to be saved', async () => ((await h.call<{ raw: { execution?: { kerriganAsks?: string } } }>('GET', '/settings')).raw.execution?.kerriganAsks === 'fail') || null, 10_000).catch(() => undefined);
+    t.check('"the task stops", when chosen, saved beside the other', [(await h.call<{ raw: { execution?: { kerriganAsks?: string; kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganAsks, (await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult], ['fail', 'exchange']);
     // Saved is not yet shown: the page lists it once it has read the list again (seen to lag on a loaded machine, 2026-10-28).
     await page.locator('.skill-entry:not(.skill-new)').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.check('and listed there, the form empty again', [await page.locator('.skill-entry:not(.skill-new)').count(), await add.getByLabel(en['skills.name']!, { exact: true }).inputValue()], [1, '']);
@@ -4302,6 +4308,69 @@ try {
     await page.getByRole('button', { name: en['kz.openHers']!, exact: true }).click();
     await page.locator('.cs-kz-turn').waitFor({ timeout: 10_000 });
     t.check('back in her conversation', await page.locator('.cs-kz-send').count(), 1);
+  });
+
+  /*
+   * How her messages run, fixed by the person (operator, 2026-11-23: "let the user choose plan mode, two chats, the
+   * review, or none of them — or automatic, as Kerrigan judges"; "the skill too"): with "Kerrigan directs" ticked, the
+   * three are each "Automatic", "On" or "Off", and "Skill" offers "Automatic" and "No skill" first. "Two chats" on leaves
+   * no review to choose. What was fixed goes with the message; her card tells it from hers, off ones too; changed while
+   * she works, it is the conversation's.
+   */
+  await scenario('Kerrigan directs: the person fixes plan mode, two chats, the review and the skill; her card tells theirs from hers', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e.', projectDir: '' }] });
+    await page.goto(url('/'));
+    const directs = page.getByRole('checkbox', { name: en['chat.kerrigan']! });
+    await directs.waitFor();
+    t.check('without Kerrigan: no choice of three', await page.locator('.cs-kz-how').count(), 0);
+    await directs.check();
+    const how = (key: string) => page.locator(`#cs-kz-${key}`);
+    const shown = async (key: string): Promise<string> => ((await how(key).locator('option:checked').textContent()) ?? '').trim();
+    t.check('ticked: plan mode, two chats and the review, each automatic at first', [await shown('planMode'), await shown('twoChats'), await shown('review')], [en['kz.auto'], en['kz.auto'], en['kz.auto']]);
+    t.check('each offers Automatic, On, Off', await how('planMode').locator('option').allTextContents(), [en['kz.auto'], en['kz.on'], en['kz.off']]);
+    t.check('"Skill" offers Automatic and No skill first', (await page.locator('#cs-skill option').allTextContents()).slice(0, 3), [en['kz.auto'], en['chat.skillNone'], '/new-test']);
+    await how('twoChats').selectOption('on');
+    t.check('"Two chats" on: no review to choose, shown off', [await how('review').isDisabled(), await shown('review')], [true, en['kz.off']]);
+    await how('twoChats').selectOption('off');
+    await how('planMode').selectOption('off');
+    await how('review').selectOption('off');
+    t.check('"Two chats" off again: the review is to choose', await how('review').isDisabled(), false);
+    await page.locator('#cs-skill').selectOption('-');
+
+    let got: Record<string, unknown> = {};
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && /\/api\/chat$/.test(new URL(r.url()).pathname)) got = JSON.parse(r.postData() ?? '{}') as Record<string, unknown>;
+    });
+    h.chat.script(
+      reply.kerrigan.send('Create done.txt at the root holding exactly the word done, and read it back with Get-Content.', { understanding: 'Goal: done.txt holding done.', title: 'Write done.txt', planMode: true, review: true, skill: 'new-test' }),
+      reply.steps(write('done.txt', 'done'), 'Get-Content done.txt'),
+      reply.done('I wrote done.txt with Set-Content and read it back: it holds done.'),
+      reply.kerrigan.done('Done: done.txt is at the root and holds done; the chat read it back with Get-Content.'),
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Create done.txt holding done.');
+    await input.press('Enter');
+    await page.locator('.cs-kz-turn .cs-end.s-done').waitFor({ timeout: 30_000 });
+    t.check('sent with what was fixed, and no skill', [got.kerrigan, Object.fromEntries(Object.entries((got.kerriganHow ?? {}) as Record<string, string>).sort()), got.noSkill, got.skill], [true, { planMode: 'off', review: 'off', twoChats: 'off' }, true, undefined]);
+    const sent = page.locator('.cs-kz-send').first();
+    const chip = async (key: string): Promise<string> => ((await sent.locator(`[data-fixed="${key}"]`).textContent()) ?? '').trim();
+    t.check('her card: each fixed one marked as yours, the off ones shown too', [await chip('planMode'), await chip('review'), await chip('skill')], [
+      `${en['kz.without']!.replace('{what}', en['kz.planMode']!)} · ${en['kz.byYou']}`,
+      `${en['kz.without']!.replace('{what}', en['kz.review']!)} · ${en['kz.byYou']}`,
+      `${en['chat.skillNone']} · ${en['kz.byYou']}`,
+    ]);
+    t.check('after the message, "Skill" is back on Automatic', await page.locator('#cs-skill option:checked').textContent(), en['kz.auto']);
+
+    // The started conversation: its own choice, changeable — kept on it.
+    const threadId = ((await page.locator('#cs-thread').inputValue()) ?? '').trim();
+    await how('planMode').selectOption('');
+    await waitFor('the change kept on the conversation', async () => {
+      const s = await h.call<{ kerrigan?: { how?: Record<string, string> } }>('GET', `/sessions/${threadId}`);
+      return JSON.stringify(s.kerrigan?.how) === JSON.stringify({ twoChats: 'off', review: 'off' }) || null;
+    }, 10_000);
+    t.check('plan mode back to hers on the conversation', await shown('planMode'), en['kz.auto']);
+    await h.call('PUT', '/skills', { skills: [] });
   });
 
   /*

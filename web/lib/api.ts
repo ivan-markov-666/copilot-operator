@@ -461,6 +461,8 @@ export type Task = {
   fromKerrigan?: { sessionId: string; taskId: string; n: number };
   /** The skill the message was sent with, as it read then (2026-10-21). */
   skill?: { name: string; description: string; text: string };
+  /** Kerrigan directs: the person chose "no skill" for this message (2026-11-23). */
+  noSkill?: boolean;
 };
 
 export type VersionControl = {
@@ -715,13 +717,19 @@ export type KerriganRound = {
   understanding?: string;
   notes?: string;
   sources?: string[];
-  send?: { n: number; title: string; prompt: string; chat: 'new' | 'same'; planMode: boolean; twoChats: boolean; review: boolean; skill?: string; sessionId?: string; taskId?: string; status?: TaskStatus; summary?: string };
+  send?: { n: number; title: string; prompt: string; chat: 'new' | 'same'; planMode: boolean; twoChats: boolean; review: boolean; skill?: string; fixed?: Array<'planMode' | 'twoChats' | 'review' | 'skill'>; sessionId?: string; taskId?: string; status?: TaskStatus; summary?: string };
   card?: { id: string; kind: 'question' | 'plan' | 'retry'; sessionId: string; taskId: string; actor?: Actor; text: string; options?: string[]; answer?: string; by?: 'kerrigan' | 'operator'; yours?: { why: string; suggestion?: string } };
   question?: { text: string; why?: string; options: string[]; multiple?: boolean; answer?: string };
   report?: string;
   evidence?: string[];
   needed?: string;
 };
+
+/**
+ * How Kerrigan's messages run, as the person fixed it (2026-11-23): each 'on' or 'off', or left out — hers to choose
+ * (automatic). Two chats reaches the next new chat she sends to.
+ */
+export type KerriganHow = { planMode?: 'on' | 'off'; twoChats?: 'on' | 'off'; review?: 'on' | 'off' };
 
 /** What Kerrigan did for one of the operator's messages. */
 export type KerriganRecord = { rounds: KerriganRound[]; sent: number; maxSends: number; messages: number; chats: string[] };
@@ -875,8 +883,8 @@ export type Session = {
   lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
   /** A worker's session: the lead's it works for. */
   workerOf?: string;
-  /** Kerrigan directs this conversation (2026-11-12); the model of the chats she sends to. */
-  kerrigan?: { chatModel?: string; chatManualModel?: boolean };
+  /** Kerrigan directs this conversation (2026-11-12); the model of the chats she sends to; what the person fixed of how they run. */
+  kerrigan?: { chatModel?: string; chatManualModel?: boolean; how?: KerriganHow };
   /** A chat Kerrigan sends her messages to: her conversation's session. */
   directedBy?: string;
   /** A conversation the queue made for one of its tasks: that task's id in the queue (2026-10-24). */
@@ -1474,6 +1482,8 @@ export const api = {
       /** Two chats: the worker's model, or by hand. */
       workerModel?: string;
       workerManualModel?: boolean;
+      /** Kerrigan directs: what the person fixes of how her messages run; `{}` leaves all of it to her. */
+      kerriganHow?: KerriganHow;
     },
   ) =>
     call<Session>(`/sessions/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
@@ -1574,7 +1584,7 @@ export const api = {
   /** `two`: a new conversation with a lead and a worker (two chats, 2026-10-20), and the worker's model. */
   /** `reviewModel`: the model of a new conversation's review, chosen beside the box (2026-10-21); left out, Settings' one. */
   /** `kerrigan`: a new conversation Kerrigan directs (2026-11-12), and the model of the chats she sends to. */
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string, reviewModel?: string, kerrigan?: { chatModel?: string; chatManualModel?: boolean }) =>
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string, reviewModel?: string, kerrigan?: { chatModel?: string; chatManualModel?: boolean; how?: KerriganHow }, noSkill?: boolean) =>
     call<ChatSent>('/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -1588,7 +1598,9 @@ export const api = {
         ...(two ? { lead: true, ...(two.workerManualModel ? { workerManualModel: true } : two.workerModel ? { workerModel: two.workerModel } : {}) } : {}),
         ...(skill ? { skill } : {}),
         ...(reviewModel ? { reviewModel } : {}),
-        ...(kerrigan ? { kerrigan: true, ...(kerrigan.chatManualModel ? { chatManualModel: true } : kerrigan.chatModel ? { chatModel: kerrigan.chatModel } : {}) } : {}),
+        ...(kerrigan ? { kerrigan: true, ...(kerrigan.chatManualModel ? { chatManualModel: true } : kerrigan.chatModel ? { chatModel: kerrigan.chatModel } : {}), ...(kerrigan.how && Object.keys(kerrigan.how).length > 0 ? { kerriganHow: kerrigan.how } : {}) } : {}),
+        // "No skill" for a message to Kerrigan (2026-11-23): every message she sends for it goes without one.
+        ...(noSkill && !skill ? { noSkill: true } : {}),
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */
