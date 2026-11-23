@@ -1850,7 +1850,9 @@ try {
       ['none', `✗ ${en['chatloc.notFound']}`],
       ['not-here', `– ${en['chatloc.notHere']} ${en['chatloc.note.writing']}`],
     ]);
-    t.check('and the count', await section.locator('.locator-check-done').textContent(), en['chatloc.checkDone'].replace('{found}', '13').replace('{none}', '1').replace('{other}', '1'));
+    // Every locator but the two set above as not found: counted from the list, which grew with `uploadError` (2026-11-23).
+    const { CHAT_LOCATOR_KEYS } = await import('../src/transport/locators.js');
+    t.check('and the count', await section.locator('.locator-check-done').textContent(), en['chatloc.checkDone'].replace('{found}', String(CHAT_LOCATOR_KEYS.length - 2)).replace('{none}', '1').replace('{other}', '1'));
     const copy = section.locator('.picker-field[data-locator-field="copy"]');
     await waitFor('the one not found in red', async () => ((await copy.evaluate((el) => el.classList.contains('locator-failed'))) ? true : null), 15_000).catch(() => undefined);
     t.check('the one not found: in red, with what to do under it', [await copy.evaluate((el) => el.classList.contains('locator-failed')), await copy.locator('.locator-failure').count()], [true, 1]);
