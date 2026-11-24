@@ -1825,6 +1825,28 @@ try {
   });
 
   /*
+   * The same for the model menu's (operator, 2026-11-24: the models could not be read, and nothing said which locator):
+   * the banner, its field in red in "The model menu's locators" with the file for a chatbot, the cursor in it; changed
+   * there, the red goes.
+   */
+  await scenario('A locator of the model menu that found nothing: the banner, its field in red in Settings, fixed there', {}, async (h, page, url) => {
+    h.ops.recordLocatorFailure({ key: 'picker:button', locator: 'button#gptModeSwitcher', why: 'the model button was not on the page when the list of models was read', stopped: false });
+    await waitFor('kept', async () => ((await h.call<unknown[]>('GET', '/locators/failures')).length ? true : null), 10_000).catch(() => undefined);
+    await page.goto(url('/system'));
+    const banner = page.locator('.locator-failure[data-locator="picker:button"]');
+    await banner.waitFor({ timeout: 15_000 });
+    t.check('the banner names it as the model menu\'s, and leads to its section', [await banner.locator('strong').textContent(), await banner.locator('a', { hasText: en['chatloc.fix'] }).getAttribute('href'), /\/locators\/failures\/picker%3Abutton\/chatbot/.test((await banner.locator('a', { hasText: en['chatloc.file'] }).getAttribute('href')) ?? '')], [en['chatloc.pickerTitle']!.replace('{name}', en['loc.button']!), '/settings?locator=picker%3Abutton#picker-locators', true]);
+    await banner.locator('a', { hasText: en['chatloc.fix'] }).click();
+    const field = page.locator('section#picker-locators .picker-field[data-locator-field="button"]');
+    await field.locator('.locator-failure').waitFor({ timeout: 15_000 });
+    await waitFor('the cursor in the field', async () => ((await page.evaluate(() => document.activeElement?.id)) === 'picker-button' ? true : null), 10_000).catch(() => undefined);
+    t.check('its field in red, the cursor in it, the file under it', [await field.evaluate((el) => el.classList.contains('locator-failed')), await page.evaluate(() => document.activeElement?.id), await field.locator('.locator-failure a', { hasText: en['chatloc.file'] }).count()], [true, 'picker-button', 1]);
+    await page.locator('#picker-button').fill('#new-model-button');
+    await waitFor('the red gone', async () => ((await field.evaluate((el) => el.classList.contains('locator-failed'))) ? null : true), 15_000).catch(() => undefined);
+    t.check('changed there: saved, and the red gone', [((await settingsOf(h)).copilot as { pickerLocators?: Record<string, string> } | undefined)?.pickerLocators, await field.locator('.locator-failure').count()], [{ button: '#new-model-button' }, 0]);
+  });
+
+  /*
    * "Check the locators" (operator, 2026-11-17): a button in the section; what each locator found under its field —
    * found, not found (and red, with what to do), not on the page then and why — and a line with the count.
    */

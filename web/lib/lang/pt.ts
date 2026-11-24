@@ -970,6 +970,7 @@ export const pt: Dictionary = {
   'chatloc.uploadErrorWhy': 'A barra do Copilot que diz que um ficheiro anexado não pôde ser enviado («The upload service is busy right now…»). Quando aparece, o bot carrega no seu «Try again» até três vezes, esperando mais de cada vez; se continuar recusado, põe o texto do ficheiro na própria mensagem e diz porquê.',
   'chatloc.failTitle': 'O bot não encontrou "{name}" na página do Copilot; o trabalho parou',
   'chatloc.warnTitle': 'O bot não encontrou "{name}" na página do Copilot; o trabalho continuou sem ele',
+  'chatloc.pickerTitle': 'O bot não encontrou "{name}" para o menu de modelos do Copilot',
   'chatloc.failWhen': 'Não encontrou nada em {when} com:',
   'chatloc.fix': 'Corrigir nas Configurações',
   'chatloc.file': 'Baixar o arquivo para um chatbot',

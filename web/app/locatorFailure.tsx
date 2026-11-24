@@ -23,17 +23,19 @@ import { usePoll } from '../lib/usePoll';
 /** Where Settings has a locator's field: the page reads `locator` and goes to it, in red. */
 export function locatorFieldUrl(key: string): string {
   // One of the operator's own steps (2026-11-17) is in "Steps to the chat", under the chat's locators.
-  return `/settings?locator=${encodeURIComponent(key)}#${key.startsWith('step:') ? 'chat-steps' : 'chat-locators'}`;
+  // The model menu's (2026-11-24) are in their own section.
+  return `/settings?locator=${encodeURIComponent(key)}#${key.startsWith('step:') ? 'chat-steps' : key.startsWith('picker:') ? 'picker-locators' : 'chat-locators'}`;
 }
 
 /** One failure: what was not found, the locator, and the ways on. `inSettings`: under its field, where "Fix" is not needed. */
 export function LocatorFailureNotice({ failure, inSettings = false, onDismiss }: { failure: LocatorFailureRef; inSettings?: boolean; onDismiss: () => void }) {
   const { t, locale } = useT();
   const fmtTime = useFmtTime();
-  const name = failure.key.startsWith('step:') ? failure.name || failure.locator : t(`chatloc.${failure.key}` as Key);
+  const picker = failure.key.startsWith('picker:');
+  const name = failure.key.startsWith('step:') ? failure.name || failure.locator : t((picker ? `loc.${failure.key.slice('picker:'.length)}` : `chatloc.${failure.key}`) as Key);
   return (
     <div className={`notice ${failure.stopped ? '' : 'caution'} locator-failure`.trim()} role="alert" data-locator={failure.key} style={{ overflowWrap: 'anywhere' }}>
-      {!inSettings && <strong>{t(failure.stopped ? 'chatloc.failTitle' : 'chatloc.warnTitle', { name })}</strong>}
+      {!inSettings && <strong>{picker ? t('chatloc.pickerTitle', { name }) : t(failure.stopped ? 'chatloc.failTitle' : 'chatloc.warnTitle', { name })}</strong>}
       <p className="small" style={{ margin: '4px 0' }}>
         {t('chatloc.failWhen', { when: fmtTime(failure.at) })} <code className="picker-example">{failure.locator}</code>
       </p>

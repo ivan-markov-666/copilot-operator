@@ -18,7 +18,8 @@ export type LocatorCheckRef = {
 };
 
 export type LocatorFailureRef = {
-  key: ChatKey | `step:${string}`;
+  /** A chat locator's key, `step:<id>` for a step of the operator's own, `picker:<key>` for one of the model menu's (2026-11-24). */
+  key: ChatKey | `step:${string}` | `picker:${PickerKey}`;
   /** A step's name, as the operator wrote it. */
   name?: string;
   locator: string;

@@ -970,6 +970,7 @@ export const ja: Dictionary = {
   'chatloc.uploadErrorWhy': '添付ファイルをアップロードできなかったことを示す Copilot のバー（「The upload service is busy right now…」）。表示されると、ボットはその「Try again」を最大 3 回、毎回長めに待って押します。それでも拒否されたら、ファイルのテキストをメッセージ本文に入れ、その理由を伝えます。',
   'chatloc.failTitle': 'ボットは Copilot のページで「{name}」を見つけられませんでした。作業は停止しました',
   'chatloc.warnTitle': 'ボットは Copilot のページで「{name}」を見つけられませんでした。作業はそれなしで続行しました',
+  'chatloc.pickerTitle': 'ボットは Copilot のモデル メニューの「{name}」を見つけられませんでした',
   'chatloc.failWhen': '{when} に次のロケーターで何も見つかりませんでした:',
   'chatloc.fix': '設定で修正',
   'chatloc.file': 'チャットボット用のファイルをダウンロード',

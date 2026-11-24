@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHarness, Tally, waitFor } from './support/harness.js';
-import { CHAT_LOCATOR_KEYS, DefaultChatLocators } from '../src/transport/locators.js';
+import { CHAT_LOCATOR_KEYS, DefaultChatLocators, DefaultPickerLocators } from '../src/transport/locators.js';
 import { LocatorFailures } from '../src/session/locatorFailures.js';
 import type { EventBus } from '../src/session/events.js';
 
@@ -164,6 +164,46 @@ console.log('\n--- "Check the locators": through the API, a window opened and cl
       return res.status === 200 ? res : null;
     }, 10_000).catch(() => null);
     t.truthy("a step's HTML: downloaded under a name with no colon", /copilot-page-step-mode-\d{8}-\d{6}\.html/.test(dl?.headers.get('content-disposition') ?? ''), dl?.headers.get('content-disposition'));
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- the model menu\'s locators (2026-11-24): kept as the chat\'s are, gone when the menu is read ---');
+{
+  const h = await startHarness();
+  try {
+    const bus = (h.ops as unknown as { bus: EventBus }).bus;
+    const failures = join(h.runsDir, 'picker-run', 'failures');
+    await mkdir(failures, { recursive: true });
+    const page = join(failures, 'locator-picker-button-1.html');
+    await writeFile(page, '<!doctype html>\n<html><body><main><button id="newButton">Auto</button></main></body></html>', 'utf8');
+    const list = async (): Promise<Failure[]> => await h.call<Failure[]>('GET', '/locators/failures');
+    const say = (key: string, locator: string): void => {
+      bus.publish({ sessionId: 's1', type: 'browser:locator-missing', level: 'warn', message: 'x', data: { key, locator, why: 'the model button was not on the page', stopped: false, html: page } });
+    };
+    say('picker:button', 'button#gptModeSwitcher');
+    say('picker:model', DefaultPickerLocators.model);
+    say('picker:nope', 'x');
+    await waitFor('kept', async () => ((await list()).length === 2 ? true : null), 10_000).catch(() => undefined);
+    t.check('kept, each under its own key; an unknown one not', (await list()).map((f) => [f.key, f.changed, f.html]).sort(), [['picker:button', false, true], ['picker:model', false, true]]);
+    t.truthy('the text for a chatbot says what each is, and keeps the place of the name', (await list()).some((f) => f.key === 'picker:model' && f.prompt.includes('{$model_name} in it where the name goes')) && (await list()).some((f) => f.key === 'picker:button' && f.prompt.includes('opens the menu of models')), JSON.stringify(await list()));
+    const res = await fetch(`http://127.0.0.1:${h.api.port}/api/locators/failures/${encodeURIComponent('picker:button')}/chatbot?lang=bg`, { headers: { 'x-cop-token': h.api.token } });
+    const text = await res.text();
+    t.check('its file for a chatbot: a download, what and where, the page in it', [res.status, /for-chatbot-picker-button-/.test(res.headers.get('content-disposition') ?? ''), text.includes('Settings → "The model menu\'s locators", the field in red'), text.includes('"button" of the model menu'), text.includes('id="newButton"'), text.includes('Speak to the user in Bulgarian')], [200, true, true, true, true, true]);
+
+    // The menu read: its button and its rows work; a template is not said to.
+    bus.publish({ sessionId: 's1', type: 'browser:models-read', level: 'info', message: 'x', data: { count: 0 } });
+    await new Promise((r) => setTimeout(r, 300));
+    t.check('a reading that found none takes nothing away', (await list()).length, 2);
+    bus.publish({ sessionId: 's1', type: 'browser:models-read', level: 'info', message: 'x', data: { count: 4 } });
+    await waitFor('the button\'s gone', async () => ((await list()).length === 1 ? true : null), 10_000).catch(() => undefined);
+    t.check('the models read: the button\'s failure goes, the template\'s stays', (await list()).map((f) => f.key), ['picker:model']);
+    const settings = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
+    await h.call('PUT', '/settings', { ...settings.raw, copilot: { ...((settings.raw.copilot as Record<string, unknown>) ?? {}), pickerLocators: { model: "//div[text()='{$model_name}']" } } });
+    t.check('changed in Settings: said as changed', (await list()).map((f) => [f.key, f.changed]), [['picker:model', true]]);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

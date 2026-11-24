@@ -980,6 +980,7 @@ export const ko: Dictionary = {
   'chatloc.uploadErrorWhy': '첨부 파일을 업로드할 수 없다는 Copilot의 막대("The upload service is busy right now…"). 나타나면 봇은 매번 더 오래 기다리며 그 "Try again"을 최대 세 번 누릅니다. 그래도 거부되면 파일의 텍스트를 메시지 자체에 넣고 이유를 말합니다.',
   'chatloc.failTitle': '봇이 Copilot 페이지에서 "{name}"을(를) 찾지 못했습니다. 작업이 중지되었습니다',
   'chatloc.warnTitle': '봇이 Copilot 페이지에서 "{name}"을(를) 찾지 못했습니다. 작업은 그것 없이 계속되었습니다',
+  'chatloc.pickerTitle': '봇이 Copilot 모델 메뉴의 "{name}"을(를) 찾지 못했습니다',
   'chatloc.failWhen': '{when}에 다음으로 아무것도 찾지 못했습니다:',
   'chatloc.fix': '설정에서 고치기',
   'chatloc.file': '챗봇용 파일 다운로드',

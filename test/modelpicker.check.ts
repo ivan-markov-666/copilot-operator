@@ -121,6 +121,83 @@ try {
   }
 
   /*
+   * A page with a switch between Chat and Cowork (operator, 2026-11-24: "they added chat and cowork, the models cannot be
+   * read"). What is on the page before the menu opens is not the menu's: a switch made of rows' roles was read as the
+   * models ("Chat", "Cowork"), and one in a group was taken for the open menu before a slow menu was there.
+   */
+  console.log('\n=== a switch between Chat and Cowork on the page; the menu opens at once, or late ===');
+  {
+    const SWITCHES: Record<string, string> = {
+      radio: '<div role="radiogroup"><button role="radio" aria-checked="true">Chat</button><button role="radio" aria-checked="false">Cowork</button></div>',
+      group: '<div role="group"><button aria-pressed="true">Chat</button><button aria-pressed="false">Cowork</button></div>',
+      option: '<div role="listbox"><div role="option" aria-selected="true">Chat</div><div role="option">Cowork</div></div>',
+      menuitem: '<div role="menubar"><div role="menuitemradio" aria-checked="true">Chat</div><div role="menuitemradio">Cowork</div></div>',
+      tab: '<div role="tablist"><button role="tab" aria-selected="true">Chat</button><button role="tab">Cowork</button></div>',
+    };
+    for (const late of [false, true]) {
+      for (const [kind, html] of Object.entries(SWITCHES)) {
+        const page = await browser.newPage();
+        const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+        const transport = new CopilotTransport({ profileDir: '', transportDir: join(transportDir, 't'), chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 2 });
+        (transport as unknown as { page: Page }).page = page;
+        let body = PAGE.replace('__MODE__', 'any').replace('<button id="gptModeSwitcher"', `${html}<button id="gptModeSwitcher"`);
+        if (late) body = body.replace("const open = () => { menu.style.display = 'block';", "const open = () => { setTimeout(() => { menu.style.display = 'block'; }, 600);");
+        await page.setContent(body);
+        const listed = await transport.listModels();
+        const chosen = await transport.selectModel('GPT 5.6 Quick response');
+        t.check(`${kind}${late ? ', a late menu' : ''}: the models are read, not the switch; one is chosen; read again after it`, [listed.options.map((o) => o.name), chosen.ok, (await transport.listModels()).options.length], [['Auto', 'Think deeper', 'GPT 5.6 Think deeper', 'GPT 5.6 Quick response'], true, 4]);
+        await page.close();
+        rmSync(transportDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  /*
+   * A locator of the model menu that found nothing is kept as the chat's are (operator, 2026-11-24): before, the models
+   * could not be read and nothing was kept — no HTML, no picture, no red field.
+   */
+  console.log('\n=== a locator of the model menu that finds nothing: kept, with the page for a chatbot ===');
+  {
+    type Said = { key: string; locator: string; why: string; stopped: boolean; html?: string; piece?: string };
+    const run = async (body: string, act: (tr: CopilotTransport, page: Page) => Promise<unknown>, opts: Record<string, unknown> = {}): Promise<{ said: Said[]; files: string; got: unknown }> => {
+      const page = await browser.newPage();
+      const dir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+      const said: Said[] = [];
+      const transport = new CopilotTransport({ profileDir: '', transportDir: join(dir, 'runs', 't'), chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 800, modelAttempts: 1, onEvent: (e, d) => { if (e === 'locator-missing') said.push(d as Said); }, ...opts });
+      (transport as unknown as { page: Page }).page = page;
+      await page.setContent(body);
+      const got = await act(transport, page);
+      const files = said.map((s) => (s.html ? readFileSync(s.html, 'utf8') : '')).join('\n');
+      await page.close();
+      rmSync(dir, { recursive: true, force: true });
+      return { said, files, got };
+    };
+    const at = (s: Said[]): unknown[] => s.map((x) => [x.key, x.stopped]);
+    const any = PAGE.replace('__MODE__', 'any');
+
+    const gone = await run(any.replace('id="gptModeSwitcher" aria-label="Model Selector"', 'id="newButton" aria-label="Pick"').replace("getElementById('gptModeSwitcher')", "getElementById('newButton')"), async (tr) => await tr.listModels());
+    t.check('no model button: said once, the work not stopped, its locator as it is in force', [at(gone.said), gone.said[0]?.locator], [[['picker:button', false]], 'button#gptModeSwitcher']);
+    t.truthy('the page is kept, with what is there instead, none of the bot\'s marks in it', gone.files.includes('id="newButton"') && !gone.files.includes('data-cop-'), gone.files.slice(0, 400));
+    t.truthy('and the reading says where the file is', (gone.got as { note?: string }).note?.includes('The model menu\'s locators') === true, (gone.got as { note?: string }).note);
+
+    const rows = await run(any, async (tr) => await tr.listModels(), { pickerLocators: { rows: '[role="nothing-like-it"]' } });
+    t.check('the menu open, no row found: the rows\' locator', at(rows.said), [['picker:rows', false]]);
+    t.truthy('kept with the menu open', rows.files.includes('Takes longer') && /role="menu"[^>]*(?<!style)/.test(rows.files), rows.files.slice(0, 400));
+
+    // A menu of no kind known here: the rows' locator in Settings reads it all the same.
+    const other = await run(any.replaceAll('role="menu"', 'data-kind="m"'), async (tr) => (await tr.listModels()).options.map((o) => o.name));
+    t.check('a menu that is no menu, listbox or dialog: read by its rows, no locator blamed', at(other.said), []);
+    t.truthy('its main models are there', (other.got as string[]).includes('Auto') && (other.got as string[]).includes('Think deeper'), other.got);
+
+    const model = await run(any, async (tr) => await tr.selectModel('Think deeper', { locator: { role: 'menuitemradio', index: 1 } }), { pickerLocators: { model: "//div[@data-none='{$model_name}']" } });
+    t.check('a model that is in the menu, its template finds nothing: said of it, with the model chosen another way', [at(model.said), (model.got as { ok: boolean }).ok], [[['picker:model', false]], true]);
+    const notOffered = await run(any, async (tr) => await tr.selectModel('Opus 9', { locator: { role: 'menuitemradio', index: 1 } }), { pickerLocators: { model: "//div[text()='{$model_name}']" } });
+    t.check('a model the page does not offer: no locator is blamed', [at(notOffered.said), (notOffered.got as { ok: boolean }).ok], [[], false]);
+    const hidden = await run(any.replace('<button id="gptModeSwitcher"', '<button id="gptModeSwitcher" style="display:none">Cowork</button><button id="gptModeSwitcher"').replace("getElementById('gptModeSwitcher')", "querySelectorAll('#gptModeSwitcher')[1]"), async (tr) => (await tr.listModels()).options.length);
+    t.check('a second button with the same id, hidden: the one that shows is pressed', [hidden.got, at(hidden.said)], [4, []]);
+  }
+
+  /*
    * The menu as the live page had it on 2026-10-05: the GPT row carries a test id, its submenu is labelled
    * by it, and once a model of the group is chosen the group's row reads that model's name. Read by text,
    * the group then lost that model, and a run asked for it went on Auto.

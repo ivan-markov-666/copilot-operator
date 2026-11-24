@@ -996,6 +996,7 @@ export const en = {
   'chatloc.uploadErrorWhy': 'Copilot\'s bar that an attached file could not be uploaded ("The upload service is busy right now…"). When it shows, the bot presses its "Try again" up to three times, waiting longer each time; still refused, it puts the file\'s text in the message itself and says why.',
   'chatloc.failTitle': 'The bot could not find "{name}" on Copilot\'s page; the work stopped',
   'chatloc.warnTitle': 'The bot could not find "{name}" on Copilot\'s page; the work went on without it',
+  'chatloc.pickerTitle': 'The bot could not find "{name}" for Copilot\'s model menu',
   'chatloc.failWhen': 'Found nothing on {when} with:',
   'chatloc.fix': 'Fix in Settings',
   'chatloc.file': 'Download the file for a chatbot',

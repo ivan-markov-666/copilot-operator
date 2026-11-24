@@ -980,6 +980,7 @@ export const ar: Dictionary = {
   'chatloc.uploadErrorWhy': 'شريط Copilot الذي يقول إن ملفًا مرفقًا تعذّر رفعه («The upload service is busy right now…»). عندما يظهر، يضغط البوت على «Try again» فيه حتى ثلاث مرات، منتظرًا أطول في كل مرة؛ وإن بقي مرفوضًا، يضع نص الملف في الرسالة نفسها ويقول السبب.',
   'chatloc.failTitle': 'لم يجد البوت «{name}» في صفحة Copilot؛ توقف العمل',
   'chatloc.warnTitle': 'لم يجد البوت «{name}» في صفحة Copilot؛ استمر العمل بدونه',
+  'chatloc.pickerTitle': 'لم يجد البوت «{name}» لقائمة نماذج Copilot',
   'chatloc.failWhen': 'لم يجد شيئًا في {when} باستخدام:',
   'chatloc.fix': 'الإصلاح في الإعدادات',
   'chatloc.file': 'تنزيل الملف لروبوت دردشة',

@@ -727,6 +727,8 @@ export async function openBrowser(
         // A locator of the chat that found nothing (2026-11-17): which, and where Settings has it; the API keeps it for the red field.
         'locator-missing': String(detail?.key ?? '').startsWith('step:')
           ? `Your step "${String(detail?.name || detail?.locator || '')}" (${String(detail?.locator ?? '')}) ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "Steps to the chat" shows it in red, with the page's HTML for a chatbot to find the right one in.`
+          : String(detail?.key ?? '').startsWith('picker:')
+          ? `Not found in Copilot's model menu: the "${String(detail?.key ?? '').slice('picker:'.length)}" locator (${String(detail?.locator ?? '')}): ${String(detail?.why ?? '')}. Settings → "The model menu's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`
           : `Not found on Copilot's page: the "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "The chat's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`,
         // The steps on the way to the chat (2026-11-17).
         'chat-step-not-used': `A step of yours in Settings is not taken: ${String(detail?.problem ?? '')}`,

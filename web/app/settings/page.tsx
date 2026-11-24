@@ -1722,6 +1722,20 @@ function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const queue = useRef<Promise<unknown>>(Promise.resolve());
+  // One that found nothing (2026-11-24): its field in red, with the file for a chatbot, as the chat's are.
+  const failures = useLocatorFailures();
+
+  // The field the address names, once the fields are there: into view, the cursor in it.
+  useEffect(() => {
+    if (!saved || !defaults) return;
+    const asked = new URLSearchParams(window.location.search).get('locator') ?? '';
+    const key = asked.startsWith('picker:') ? asked.slice('picker:'.length) : '';
+    if (!(PICKER_KEYS as string[]).includes(key)) return;
+    const field = document.getElementById(`picker-${key}`) as HTMLInputElement | null;
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.focus();
+  }, [saved, defaults]);
 
   useEffect(() => {
     api
@@ -1745,6 +1759,8 @@ function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null
         await track(api.updateSettings((base) => ({ ...base, copilot: change({ ...((base.copilot as Record<string, unknown>) ?? {}) }) })));
         setMsg(t('loc.saved'));
         setErr('');
+        // A locator changed is no longer the one that found nothing: its red goes with the next reading.
+        await failures.reload();
       } catch (e) {
         setErr((e as Error).message);
       }
@@ -1787,18 +1803,22 @@ function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null
         </details>
         {err && <div className="err">{err}</div>}
         {saved && defaults
-          ? PICKER_FIELDS.map((f) => (
-              <LocatorField
-                key={f.key}
-                field={f.key}
-                label={t(f.label)}
-                why={t(f.why)}
-                initial={saved[f.key]}
-                fallback={defaults[f.key]}
-                example={exampleOf(f.key)}
-                onSave={(v) => saveLocator(f.key, v)}
-              />
-            ))
+          ? PICKER_FIELDS.map((f) => {
+              const failed = failures.list.find((x) => x.key === `picker:${f.key}`) ?? null;
+              return (
+                <LocatorField
+                  key={f.key}
+                  field={f.key}
+                  label={t(f.label)}
+                  why={t(f.why)}
+                  initial={saved[f.key]}
+                  fallback={defaults[f.key]}
+                  example={exampleOf(f.key)}
+                  failed={failed ? <LocatorFailureNotice failure={failed} inSettings onDismiss={() => void failures.dismiss(failed.key)} /> : null}
+                  onSave={(v) => saveLocator(f.key, v)}
+                />
+              );
+            })
           : !err && <p className="muted small">{t('loc.loading')}</p>}
         <div className="settings-field">
           <div className="field-label check-label">

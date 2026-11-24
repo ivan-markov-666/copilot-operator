@@ -55,6 +55,8 @@ export function strippedPageHtml(arg: { keepSidebar: boolean; anchor?: Node | nu
       }
       // Inline images and the like: the attribute stays, its value shortened.
       if (/^data:/i.test(at.value) && at.value.length > 80) el.setAttribute(at.name, `${at.value.slice(0, 40)}…`);
+      // The bot's own marks (a row read, what was on the page before the menu) are not the page's: never a locator.
+      if (/^data-cop-/i.test(at.name)) el.removeAttribute(at.name);
       // The page's own styles on an element say nothing about which element it is.
       if (at.name === 'style') el.removeAttribute('style');
     }

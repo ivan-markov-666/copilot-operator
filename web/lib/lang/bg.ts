@@ -964,6 +964,7 @@ export const bg: Dictionary = {
   'chatloc.uploadErrorWhy': 'Лентата на Copilot, че прикаченият файл не е качен („The upload service is busy right now…“). Когато се появи, ботът натиска нейното „Try again“ до три пъти, като чака все по-дълго; ако пак е отказано, слага текста на файла в самото съобщение и казва защо.',
   'chatloc.failTitle': 'Ботът не намери „{name}“ в страницата на Copilot; работата спря',
   'chatloc.warnTitle': 'Ботът не намери „{name}“ в страницата на Copilot; работата продължи без него',
+  'chatloc.pickerTitle': 'Ботът не намери „{name}“ за менюто с модели на Copilot',
   'chatloc.failWhen': 'Не намери нищо на {when} с:',
   'chatloc.fix': 'Поправи в Settings',
   'chatloc.file': 'Изтегли файл за чатбота',

@@ -182,6 +182,37 @@ export const PickerPlaceholder: Record<PickerLocatorKey, string | null> = {
   providerModel: MODEL_NAME,
 };
 
+/**
+ * The model menu's locators that found nothing are kept as the chat's are (operator, 2026-11-24: the models could not be
+ * read at work, and nothing was kept to say why): under `picker:<key>`, with the page's HTML, the field in red and the
+ * file for a chatbot.
+ */
+export type PickerFailureKey = `picker:${PickerLocatorKey}`;
+export const pickerFailureKey = (key: PickerLocatorKey): PickerFailureKey => `picker:${key}`;
+/** The model menu's locator a failure's key names, or null when it names another kind. */
+export function pickerKeyOf(key: string): PickerLocatorKey | null {
+  const k = key.startsWith('picker:') ? key.slice('picker:'.length) : '';
+  return (PICKER_LOCATOR_KEYS as readonly string[]).includes(k) ? (k as PickerLocatorKey) : null;
+}
+
+/** What each one is, for a chatbot that reads the page's HTML (as `ChatLocatorWhat`). */
+export const PickerLocatorWhat: Record<PickerLocatorKey, string> = {
+  button: 'the button that opens the menu of models of the chat and shows the model in force ("Auto", "Think deeper", "GPT…"); not the switch between Chat and Cowork, and not Cowork\'s own model button',
+  rows: 'every row of the open menu of models, and of a provider\'s menu that opens beside it (Auto, Think deeper, GPT…): the element whose first line of text is the name; nothing outside that menu',
+  model: `the row of one model in the menu the model button opens; ${MODEL_NAME} is where the model's name goes`,
+  provider: `the row of the menu of models that opens a menu of its own (GPT, Claude…); ${PROVIDER_NAME} is where its name goes`,
+  providerModel: `the row of one model in a provider's own menu; ${MODEL_NAME} is where the model's name goes`,
+};
+
+/** When each is on the screen, for a person to bring it there (as `ChatLocatorShows`). */
+export const PickerLocatorShows: Record<PickerLocatorKey, string> = {
+  button: 'open Copilot\'s chat (Chat, not Cowork, when the page has both): the button shows the model in force',
+  rows: 'open Copilot\'s chat and press the button that shows the model: its menu opens (do not choose anything)',
+  model: 'open Copilot\'s chat and press the button that shows the model: its menu opens (do not choose anything)',
+  provider: 'open Copilot\'s chat and press the button that shows the model: its menu opens, the rows with an arrow are the providers',
+  providerModel: 'open Copilot\'s chat, press the button that shows the model, and point the mouse at a provider (GPT, Claude): its own menu opens',
+};
+
 /** Whether a locator is an XPath: it starts as one does. */
 export function isXPath(locator: string): boolean {
   return /^\s*(\/|\(|\.\.?\/)/.test(locator);
@@ -338,6 +369,8 @@ export const NearPlaces = {
   wrapper: { selector: '[data-test-id="chat-input-wrapper"], [data-testid="chat-input-wrapper"]', what: 'the area around the box where a message is typed' },
   dialog: { selector: '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]', what: 'the dialog open on the page' },
   menu: { selector: '[role="menu"], [role="listbox"]', what: 'the menu open on the page' },
+  // The menu the model button opened: not one that was on the page before it was pressed (see `pressPicker`).
+  modelMenu: { selector: ':is([role="menu"],[role="listbox"],[role="dialog"]):not([data-cop-page])', what: 'the menu open after the model button was pressed' },
   main: { selector: 'main, [role="main"]', what: 'the main part of the page, where the conversation is' },
   sidebar: { selector: 'nav, [role="navigation"], aside', what: 'the sidebar with the list of conversations' },
 } as const;
@@ -368,6 +401,15 @@ export const ChatLocatorNear: Record<ChatLocatorKey, Array<ChatLocatorKey | Near
 };
 /** For one of the operator's own steps, whose element can be anywhere: a dialog first (most are), then the box's area. */
 export const StepNear: Array<ChatLocatorKey | NearPlace> = ['dialog', 'wrapper', 'composer', 'main'];
+
+/** The same for the model menu's locators: the button is beside the box or in the head of the page; the rest in the open menu. */
+export const PickerLocatorNear: Record<PickerLocatorKey, Array<ChatLocatorKey | NearPlace>> = {
+  button: ['wrapper', 'composer', 'main'],
+  rows: ['modelMenu', 'wrapper', 'main'],
+  model: ['modelMenu', 'menu'],
+  provider: ['modelMenu', 'menu'],
+  providerModel: ['modelMenu', 'menu'],
+};
 
 /** When each one is on the screen, for a person to bring it there and find it by hand in the browser's developer tools. */
 export const ChatLocatorShows: Record<ChatLocatorKey, string> = {
@@ -430,14 +472,18 @@ export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, strin
  * the HTML to a chatbot and have it say which locator it is and what its selector is"). In English: the chatbot reads
  * it, not the operator, and Copilot's page is in English on the work machine.
  */
-export function locatorPrompt(key: ChatLocatorKey, failed: string): string {
+export function locatorPrompt(failure: ChatLocatorKey | PickerFailureKey, failed: string): string {
+  const picker = pickerKeyOf(failure);
+  const key = failure as ChatLocatorKey;
+  const needs = picker ? PickerPlaceholder[picker] : null;
   return [
     'The attached file is the HTML of the Microsoft 365 Copilot chat page in a browser (scripts, styles and the list of conversations taken out).',
-    `Find this element in it: ${ChatLocatorWhat[key]}.`,
+    `Find this element in it: ${picker ? PickerLocatorWhat[picker] : ChatLocatorWhat[key]}.`,
     `This locator used to find it and now finds nothing: ${failed}`,
     'Give me one locator that finds exactly this element, and only it: a CSS selector, or an XPath if CSS cannot say it.',
     'Use what stays the same between versions of the page: id, role, aria-label, data-testid, data-test-id and other data-* attributes, the tag.',
     'Do not use class names made of random letters (like azFuQXgw or ___1x5usfw): they change with every new version of the page.',
+    ...(needs ? [`Keep ${needs} in it where the name goes.`] : []),
     ...(ChatPlaceholder[key] === CHAT_ID ? [`Keep ${CHAT_ID} in it where the conversation's id goes.`] : []),
     ...(ChatPlaceholder[key] === FILE_NAME
       ? [`Keep ${FILE_NAME} in it where the file's name goes (message-01-in-full.txt), or ${FILE_STEM} for the name without its extension (message-01-in-full): the attached file in the HTML is message-01-in-full.txt.`]

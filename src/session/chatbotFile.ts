@@ -10,7 +10,7 @@
  * operator in the language of the bot's interface.
  */
 import type { LocatorFailure } from './locatorFailures.js';
-import { CHAT_ID, ChatLocatorShows, ChatLocatorWhat, ChatPlaceholder, FILE_NAME, FILE_STEM, type ChatLocatorKey } from '../transport/locators.js';
+import { CHAT_ID, ChatLocatorShows, ChatLocatorWhat, ChatPlaceholder, FILE_NAME, FILE_STEM, pickerKeyOf, PickerLocatorShows, PickerLocatorWhat, PickerPlaceholder, type ChatLocatorKey } from '../transport/locators.js';
 import type { ChatStep } from '../transport/chatSteps.js';
 
 const LANGUAGE_NAMES: Record<string, string> = {
@@ -53,6 +53,8 @@ export type ChatbotFileInput = {
 
 /** What the element is, said for the chatbot. */
 function elementOf(failure: LocatorFailure, step: ChatbotFileInput['step']): string {
+  const picker = pickerKeyOf(failure.key);
+  if (picker) return PickerLocatorWhat[picker];
   if (!failure.key.startsWith('step:')) return ChatLocatorWhat[failure.key as ChatLocatorKey];
   const action = step?.action ?? 'click';
   const what =
@@ -65,6 +67,8 @@ function elementOf(failure: LocatorFailure, step: ChatbotFileInput['step']): str
 
 /** When the element is on the screen, for the person to bring it there by hand. */
 function showsWhen(failure: LocatorFailure, step: ChatbotFileInput['step']): string {
+  const picker = pickerKeyOf(failure.key);
+  if (picker) return PickerLocatorShows[picker];
   if (!failure.key.startsWith('step:')) return ChatLocatorShows[failure.key as ChatLocatorKey];
   const when = (step?.when ?? 'message') === 'open' ? 'right after the chat opens' : 'just before a message is sent';
   return `bring the page to where the program meets it, ${when} (the user knows the step: "${step?.name || failure.name || ''}")`;
@@ -73,8 +77,13 @@ function showsWhen(failure: LocatorFailure, step: ChatbotFileInput['step']): str
 /** The file's text (Markdown, kept as .txt so every chatbot takes it as an attachment). */
 export function chatbotFile({ failure, step, piece, page, lang }: ChatbotFileInput): string {
   const isStep = failure.key.startsWith('step:');
-  const where = isStep ? 'Settings → "Steps to the chat", the step\'s row in red' : 'Settings → "The chat\'s locators", the field in red';
-  const placeholder = isStep ? undefined : ChatPlaceholder[failure.key as ChatLocatorKey];
+  const picker = pickerKeyOf(failure.key);
+  const where = isStep
+    ? 'Settings → "Steps to the chat", the step\'s row in red'
+    : picker
+      ? 'Settings → "The model menu\'s locators", the field in red'
+      : 'Settings → "The chat\'s locators", the field in red';
+  const placeholder = isStep || picker ? undefined : ChatPlaceholder[failure.key as ChatLocatorKey];
   const language = languageName(lang);
   const cutPage = page.length > PAGE_CAP ? `${page.slice(0, PAGE_CAP)}\n<!-- … the rest of the page is cut here (it is ${page.length} characters long) -->` : page;
   const lines: string[] = [
@@ -94,9 +103,9 @@ export function chatbotFile({ failure, step, piece, page, lang }: ChatbotFileInp
     '## What failed',
     '',
     `- **The element:** ${elementOf(failure, step)}.`,
-    `- **Its name in the program:** ${isStep ? `the step "${step?.name || failure.name || failure.key.slice(5)}"` : `"${failure.key}"`}`,
+    `- **Its name in the program:** ${isStep ? `the step "${step?.name || failure.name || failure.key.slice(5)}"` : `"${picker ? `${picker}" of the model menu` : `${failure.key}"`}`}`,
     `- **The old locator, which now finds nothing:** \`${failure.locator}\``,
-    `- **When and what the program was doing:** ${failure.at}: ${isStep ? failure.why : `it found nothing ${failure.why}`}`,
+    `- **When and what the program was doing:** ${failure.at}: ${isStep || picker ? failure.why : `it found nothing ${failure.why}`}`,
     `- **The work:** ${failure.stopped ? 'stopped there' : 'went on without it, more slowly or with something left undone'}`,
     ...(failure.url ? [`- **The page's address:** ${failure.url}`] : []),
     '',
@@ -105,7 +114,8 @@ export function chatbotFile({ failure, step, piece, page, lang }: ChatbotFileInp
     '- A CSS selector; an XPath (starting with /) only when CSS cannot say it. The program also takes Playwright\'s :text-is("…"), :has-text("…"), :has(…) and role=button[name="…"].',
     '- Use what stays the same between versions of the page: id, role, aria-label, data-testid, data-test-id and other data-* attributes, the tag, the visible text.',
     '- Do not use class names made of random letters (like azFuQXgw or ___1x5usfw): they change with every new version of the page.',
-    '- Before you give it, check it against the HTML below: it must match exactly one element (for elements the page shows many of, like the conversation\'s messages, it must match each of them and nothing else).',
+    '- Before you give it, check it against the HTML below: it must match exactly one element (for elements the page shows many of, like the conversation\'s messages or a menu\'s rows, it must match each of them and nothing else).',
+    ...(picker && PickerPlaceholder[picker] ? [`- Keep ${PickerPlaceholder[picker]} in it where the name goes: the program puts the name there, so write the locator for one name of the menu and put it in that name's place.`] : []),
     ...(placeholder === CHAT_ID ? [`- Keep ${CHAT_ID} in it where the conversation's id goes: the program puts the id there.`] : []),
     ...(placeholder === FILE_NAME
       ? [`- Keep ${FILE_NAME} in it where the file's name goes (the HTML shows message-01-in-full.txt or the like), or ${FILE_STEM} for the name without its extension (message-01-in-full): the program puts the name there.`]
@@ -116,7 +126,7 @@ export function chatbotFile({ failure, step, piece, page, lang }: ChatbotFileInp
     '1. The locator alone, in a code block.',
     '2. One line on why it is that element.',
     `3. Tell the user to paste it into the program: ${where}.`,
-    '4. Tell the user how to check it on the real page: in Edge on the Copilot page, press F12, open "Elements", press Ctrl+F, paste the locator: it must show "1 of 1". (Ctrl+F there takes CSS and XPath, not Playwright\'s :text-is() or role=…: for those, the program\'s own "Check the locators" in Settings does the check.) If it shows "0 of 0" or more than one, the user tells you, and you look again.',
+    '4. Tell the user how to check it on the real page: in Edge on the Copilot page, press F12, open "Elements", press Ctrl+F, paste the locator: it must show "1 of 1". (Ctrl+F there takes CSS and XPath, not Playwright\'s :text-is() or role=…: for those, the program\'s own ' + (picker ? '"Read the latest models from Copilot"' : '"Check the locators"') + ' in Settings does the check.) If it shows "0 of 0" or more than one, the user tells you, and you look again.',
     '',
     '## Where to look',
     '',

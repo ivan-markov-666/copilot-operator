@@ -44,6 +44,8 @@ import {
   Url,
   type ChatLocatorKey,
   type ChatLocators,
+  PickerLocatorNear,
+  pickerFailureKey,
   type NearPlace,
   type PickerLocatorKey,
   type PickerLocators,
@@ -590,6 +592,8 @@ export class CopilotTransport {
   private answerStillMs = 60_000;
   /** The locators said already in this window, where the work went on without them: said once. */
   private readonly warned = new Set<ChatLocatorKey>();
+  /** The same for the model menu's (2026-11-24). */
+  private readonly pickerWarned = new Set<PickerLocatorKey>();
   /** How long Send is waited for once the message is in the box. */
   private sendWaitMs = 20_000;
   /** How long a message sent is waited for in the conversation before it is taken as not accepted. */
@@ -930,6 +934,18 @@ export class CopilotTransport {
       `Not found on Copilot's page: ${ChatLocatorWhat[key]}. The "${key}" locator found nothing ${why}. In force: ${locator} ` +
         `(Settings → "The chat's locators"). ${files}`.trim();
     return new LocatorMissing(key, locator, message, html, picture);
+  }
+
+  /**
+   * One of the model menu's locators that found nothing (operator, 2026-11-24: the models could not be read at work, and
+   * nothing was kept to say why): said and kept as the chat's are, with the page as it is now — the menu still open,
+   * when there is one. The work goes on (the model is asked of the operator); said once a window for each.
+   */
+  private async pickerMissing(key: PickerLocatorKey, why: string): Promise<void> {
+    if (this.pickerWarned.has(key) || !this.page || this.page.isClosed()) return;
+    this.pickerWarned.add(key);
+    const { picture, html, url, piece, around } = await this.keepPage(`locator-picker-${key}-${Date.now()}`, false, { near: PickerLocatorNear[key] });
+    this.emit('locator-missing', { key: pickerFailureKey(key), locator: this.locators[key], why, stopped: false, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}), ...(piece ? { piece, around } : {}) });
   }
 
   /**
@@ -1958,15 +1974,15 @@ Current URL: ${url}`);
   private async resolveModelButton(timeoutMs = 15_000): Promise<Locator | null> {
     const deadline = Date.now() + timeoutMs;
     do {
-      const byId = this.modelButton();
-      if ((await byId.count().catch(() => 0)) > 0) return byId.first();
-
-      const byLabel = this.p.getByRole('button', { name: Model.buttonLabel, exact: false });
-      if ((await byLabel.count().catch(() => 0)) > 0) return byLabel.first();
-
+      // One that shows first (2026-11-24): a page with Chat and Cowork can keep the button of the part not shown.
+      for (const found of [this.modelButton(), this.p.getByRole('button', { name: Model.buttonLabel, exact: false })]) {
+        const shown = found.filter({ visible: true });
+        if ((await shown.count().catch(() => 0)) > 0) return shown.first();
+      }
       await this.hold(500);
     } while (Date.now() < deadline);
-    return null;
+    const hidden = this.modelButton();
+    return (await hidden.count().catch(() => 0)) > 0 ? hidden.first() : null;
   }
 
   /**
@@ -1986,20 +2002,31 @@ Current URL: ${url}`);
     this.sayLocatorProblems();
     const button = await this.resolveModelButton();
     if (!button) {
-      return { options: [], current: null, note: `This chat does not show a model picker, so there is nothing to choose (the picker button's locator: ${this.locators.button}).` };
+      await this.pickerMissing('button', 'the model button was not on the page when the list of models was read');
+      return { options: [], current: null, note: `This chat does not show a model picker, so there is nothing to choose (the picker button's locator: ${this.locators.button}). The page is kept: Settings → "The model menu's locators" has the file for a chatbot.` };
     }
 
     const current = await this.currentModel();
-    await button.click();
+    const pressed = await this.pressPicker(button, 15_000).then(() => '', (e: unknown) => {
+      if (e instanceof StoppedByOperator) throw e;
+      return ((e as Error).message.split('\n')[0] ?? '').trim() || 'it could not be pressed';
+    });
+    if (pressed) {
+      await this.pickerMissing('button', `what the model button's locator finds could not be pressed when the list of models was read (${pressed})`);
+      return { options: [], current, note: `What the picker button's locator finds (${this.locators.button}) could not be pressed. The page is kept: Settings → "The model menu's locators" has the file for a chatbot.` };
+    }
     if (!(await this.waitForPopup())) {
+      await this.pickerMissing('rows', 'the model button was pressed and no menu opened in which they find anything (when no menu opened at all, the button\'s locator is the one to look at)');
+      await this.captureMenu('top', []);
       await this.closeMenu();
-      return { options: [], current, note: 'The model picker opened nothing that could be read.' };
+      return { options: [], current, note: 'The model picker opened nothing that could be read. The page is kept: Settings → "The model menu\'s locators" has the file for a chatbot.' };
     }
 
     // The top menu only: a group's submenu can be on screen with it (2026-10-05, Claude's above GPT's).
-    const shown = await this.readMenuRows();
+    const shown = await this.rowsShown();
     const top = this.topRows(shown);
     await this.captureMenu('top', shown);
+    if (shown.length === 0) await this.pickerMissing('rows', 'the model menu opened, and no row was found in it');
     await this.closeMenu();
     if (shown.length === 0) {
       return { options: [], current, note: `The model menu opened, and its rows' locator found nothing in it (${this.locators.rows}). Settings → "The model menu's locators" has it; the menu is kept as models-top.html/.png.` };
@@ -2061,7 +2088,59 @@ Current URL: ${url}`);
   }
 
   /**
-   * Every visible menu row right now, across the menu and whatever submenu is open, in page order.
+   * Presses the picker button, marking first what is on the page before its menu opens (2026-11-24): what looks like a
+   * menu's row or a menu, and is there already, is not the model menu's. A switch between Chat and Cowork made of
+   * `radio`s was read as the list of models ("Chat", "Cowork"), and one in a `group` was taken for the open menu before
+   * the menu was there. Not marked: what is in a menu this bot has read, which may still be on its way out; and nothing
+   * while the button says its menu is open.
+   */
+  private async pressPicker(button: Locator, timeoutMs?: number): Promise<void> {
+    const open = (await button.getAttribute('aria-expanded', { timeout: 5_000 }).catch(() => null)) === 'true';
+    if (!open) {
+      await this.p
+        .evaluate(
+          ({ query, popups }) => {
+            for (const el of Array.from(document.querySelectorAll('[data-cop-page]'))) el.removeAttribute('data-cop-page');
+            const found: Element[] = Array.from(document.querySelectorAll(popups.join(',')));
+            try {
+              if (query.xpath) {
+                const snap = document.evaluate(query.text, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                for (let i = 0; i < snap.snapshotLength; i += 1) {
+                  const node = snap.snapshotItem(i);
+                  if (node instanceof Element) found.push(node);
+                }
+              } else found.push(...Array.from(document.querySelectorAll(query.text)));
+            } catch {
+              /* said by the reading of the rows */
+            }
+            for (const el of found) {
+              if ((el as HTMLElement).getClientRects().length === 0) continue;
+              if (el.hasAttribute('data-cop-row')) continue;
+              if (el.matches('[role="menu"],[role="listbox"]') && el.querySelector('[data-cop-row]')) continue;
+              el.setAttribute('data-cop-page', '');
+            }
+          },
+          { query: pageQuery(this.locators.rows), popups: [...Model.popupSelectors] },
+        )
+        .catch(() => undefined);
+    }
+    await button.click(timeoutMs === undefined ? undefined : { timeout: timeoutMs });
+  }
+
+  /** The rows of the menu just opened, given a moment to be drawn: a menu's box can be there before its rows. */
+  private async rowsShown(timeoutMs = 3_000): Promise<MenuRow[]> {
+    const deadline = Date.now() + timeoutMs;
+    let rows = await this.readMenuRows();
+    while (rows.length === 0 && Date.now() < deadline) {
+      await this.hold(200);
+      rows = await this.readMenuRows();
+    }
+    return rows;
+  }
+
+  /**
+   * Every visible menu row right now, across the menu and whatever submenu is open, in page order. Not what was on the
+   * page before the menu opened (see `pressPicker`).
    *
    * Each row says which menu it is in (`menuOf`, the menu's `aria-labelledby`: a submenu is labelled by
    * the row that opens it) and its place there (`index`), so the same row can be found again without
@@ -2098,6 +2177,7 @@ Current URL: ${url}`);
           // A menu that is closed is still in the DOM, so visibility is what separates
           // what is on screen from what was on screen a moment ago.
           if ((el as HTMLElement).getClientRects().length === 0) continue;
+          if (el.hasAttribute('data-cop-page')) continue;
           const menu = el.closest('[role="menu"],[role="listbox"]');
           const index = counted.get(menu) ?? 0;
           counted.set(menu, index + 1);
@@ -2219,8 +2299,9 @@ Current URL: ${url}`);
 
   /** Opens a fresh menu, then the group, and reads what is in it. */
   private async readSubmenu(button: Locator, group: { testId?: string; index: number; name: string; vendor?: string }): Promise<MenuRow[]> {
-    await button.click();
+    await this.pressPicker(button);
     if (!(await this.waitForPopup())) return [];
+    await this.rowsShown();
     const key = await this.openGroup(group);
     const children = key ? (await this.readMenuRows()).filter((r) => r.menuOf === key) : [];
     await this.captureMenu(`group-${group.name.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, children);
@@ -2259,7 +2340,7 @@ Current URL: ${url}`);
   private async openToModel(name: string, group: string | undefined): Promise<{ row: Locator } | { problem: string }> {
     const button = await this.resolveModelButton();
     if (!button) return { problem: 'This chat does not show a model picker.' };
-    await button.click();
+    await this.pressPicker(button);
     if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
     if (group) {
       const trigger = await this.rowBy(`${Model.groupRowXPath(group)} | ${Model.groupRowByAllText(group)}`, group, 4_000);
@@ -2388,14 +2469,30 @@ Current URL: ${url}`);
       const byLocator = await this.rowBy(g.locator, g.name, 0);
       if (byLocator) return byLocator;
       const atPlace = await this.groupRowAt(g.at);
+      /*
+       * Said of the locator only when its row is in the menu under the very name it was filled with (2026-11-24): the
+       * row of a provider reads the model chosen in it, and its name is then not there for any locator to find.
+       */
+      if (atPlace && sameModel(await textOf(atPlace), g.name) && !(await this.rowBy(g.locator, g.name, 500))) {
+        await this.pickerMissing('provider', `the row "${g.name}" is in the model menu, and the provider's locator filled with it finds nothing (${g.locator})`);
+      }
       if (atPlace) this.emit('model-step', { step: 'provider found where the list read it, not by its locator', provider: g.name, locator: g.locator });
       return atPlace;
+    };
+    /**
+     * A template that does not find its model: said of the locator only when the model is in the menu, as the rows read
+     * it — not when the page does not offer it any more, or under another name, which no locator can help.
+     */
+    const templateMissed = async (rows: MenuRow[]): Promise<void> => {
+      if (!rows.some((r) => !r.opensSubmenu && sameModel(r.name, target.model))) return;
+      const where = target.group ? `the menu of "${target.group.name}"` : 'the model menu';
+      await this.pickerMissing(target.kind, `"${target.model}" is in ${where}, and the locator filled with it finds nothing (${target.locator})`);
     };
     /** `missing`: what was looked for first was never there, whatever the wait — the locator finds nothing. */
     const reach = async (): Promise<{ row: Locator } | { problem: string; missing?: boolean }> => {
       const button = await waitThenFind('the picker button', async () => visible(await this.resolveModelButton(1_000)));
       if (!button) return { problem: 'This chat does not show a model picker.' };
-      await button.click({ timeout: 5_000 }).catch(() => undefined);
+      await this.pressPicker(button, 5_000).catch(() => undefined);
       await settle();
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
       this.emit('model-step', { step: 'picker opened' });
@@ -2430,6 +2527,7 @@ Current URL: ${url}`);
           if (shownNow.some((r) => r.menuOf !== shownNow[0]?.menuOf)) {
             this.emit('model-step', { step: "provider's menu open, the model's locator finds nothing in it", how, locator: target.locator });
             await keepFailure();
+            await templateMissed(shownNow.filter((r) => r.menuOf !== shownNow[0]?.menuOf));
             return { problem: `"${target.model}" was not found in the "${target.group.name}" menu by the locator for a model in a provider's menu (${target.locator}); the menu is kept as models-select-failed.html/.png`, missing: true };
           }
           this.emit('model-step', { step: 'group not opened', how });
@@ -2441,6 +2539,7 @@ Current URL: ${url}`);
       const row = await waitThenFind(`"${target.model}"`, () => this.rowBy(target.locator, name, 0));
       if (!row) {
         await keepFailure();
+        await templateMissed(this.topRows(await this.readMenuRows().catch(() => [])));
         return { problem: `"${target.model}" was not found by the locator for a model of the main menu (${target.locator}); the menu is kept as models-select-failed.html/.png`, missing: true };
       }
       return { row };
@@ -2455,7 +2554,7 @@ Current URL: ${url}`);
       if (!target.group) return false;
       const button = await waitThenFind('the picker button', async () => visible(await this.resolveModelButton(1_000)));
       if (!button) return false;
-      await button.click({ timeout: 5_000 }).catch(() => undefined);
+      await this.pressPicker(button, 5_000).catch(() => undefined);
       await settle();
       if (!(await this.waitForPopup())) return false;
       const group = await waitThenFind(`the "${target.group.name}" provider`, providerRow);
@@ -2656,7 +2755,7 @@ Current URL: ${url}`);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       for (const selector of Model.popupSelectors) {
-        const candidate = this.p.locator(selector);
+        const candidate = this.p.locator(`${selector}:not([data-cop-page])`);
         const n = await candidate.count().catch(() => 0);
         for (let i = 0; i < n; i += 1) {
           const one = candidate.nth(i);
@@ -2665,7 +2764,12 @@ Current URL: ${url}`);
       }
       await this.hold(250);
     }
-    return null;
+    /*
+     * No menu of a kind known here, and rows that were not on the page before (2026-11-24): the rows' locator, which the
+     * operator can write, finds the menu whatever it is made of; before, no locator in Settings could.
+     */
+    const row = (await this.readMenuRows().catch(() => []))[0];
+    return row ? this.p.locator(`[data-cop-row="${row.menuOf}#${row.index}"]`).first() : null;
   }
 
   /**
@@ -2696,7 +2800,10 @@ Current URL: ${url}`);
 
   private async chooseModel(name: string, opts: { locator?: ModelLocator }): Promise<ModelChoice> {
     const button = await this.resolveModelButton();
-    if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
+    if (!button) {
+      await this.pickerMissing('button', `the model button was not on the page when "${name}" was to be chosen`);
+      return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
+    }
 
     /*
      * Looked at before anything is opened: a conversation the run comes back to is usually on its model

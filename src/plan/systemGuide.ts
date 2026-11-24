@@ -265,9 +265,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Fix in Settings',
             bg: 'Поправи в Settings',
             doesEn:
-              'On every page, when a locator of the chat found nothing: opens Settings → "The chat\'s locators" at that locator\'s field, in red, the cursor in it. A failure that stopped the work opens it once by itself.',
+              'On every page, when a locator of the chat or of the model menu found nothing: opens Settings at that locator\'s field, in red, the cursor in it. A failure that stopped the work opens it once by itself.',
             doesBg:
-              'На всяка страница, когато локатор на чата не е намерил нищо: отваря Settings → „Локатори на чата“ на полето на този локатор, в червено, с курсора в него. Провал, спрял работата, го отваря веднъж сам.',
+              'На всяка страница, когато локатор на чата или на менюто с модели не е намерил нищо: отваря Settings на полето на този локатор, в червено, с курсора в него. Провал, спрял работата, го отваря веднъж сам.',
           },
           {
             key: 'chatloc.file',
@@ -294,6 +294,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The same notice, for something the work can do without — naming the conversation, the sign that an attached file finished uploading: the work went on, more slowly or with that left undone; fixing the locator is the same.',
             doesBg:
               'Същото съобщение, за нещо, без което работата може — именуването на разговора, знакът, че прикачен файл е качен: работата е продължила, по-бавно или без това; поправката на локатора е същата.',
+          },
+          {
+            key: 'chatloc.pickerTitle',
+            kind: 'note',
+            en: 'The bot could not find "{name}" for Copilot\'s model menu',
+            bg: 'Ботът не намери „{name}“ за менюто с модели на Copilot',
+            doesEn:
+              'The same notice, for a locator of the model menu (its button, its rows, a model or a provider in it), when the list of models is read or a model is chosen: the page is kept, the field is red in Settings, "The model menu\'s locators". Meanwhile the model can be chosen by hand.',
+            doesBg:
+              'Същото съобщение за локатор на менюто с модели (бутона, редовете, модел или provider в него), когато се чете списъкът с модели или се избира модел: страницата се пази, полето е в червено в Settings, „Локатори на менюто за модели“. Дотогава моделът може да се избира на ръка.',
           },
         ],
       },

@@ -13,7 +13,7 @@ import { isAbsolute, relative } from 'node:path';
 import { readFile as readFileText } from 'node:fs/promises';
 import { LocatorFailures, type LocatorFailure } from '../session/locatorFailures.js';
 import { chatbotFile } from '../session/chatbotFile.js';
-import { CHAT_LOCATOR_KEYS, locatorPrompt, resolveChatLocators, type ChatLocatorKey } from '../transport/locators.js';
+import { CHAT_LOCATOR_KEYS, locatorPrompt, pickerFailureKey, pickerKeyOf, resolveChatLocators, resolvePickerLocators, type ChatLocatorKey, type PickerFailureKey, type PickerLocatorKey } from '../transport/locators.js';
 import { LocatorMissing, type LocatorCheck } from '../transport/copilotTransport.js';
 import { isStepKey, stepKey, stepPrompt } from '../transport/chatSteps.js';
 import { basename, join, resolve } from 'node:path';
@@ -549,6 +549,7 @@ export class OperatorService {
     // A chat locator that found nothing (2026-11-17): kept for the banner and Settings.
     else if (e.type === 'browser:locator-missing' && e.data) this.recordLocatorFailure(e.data);
     else if (e.type === 'browser:locator-found' && e.data) this.locatorFound(e.data);
+    else if (e.type === 'browser:models-read' || e.type === 'browser:model-selected') this.pickerWorked(e.type, e.data as Record<string, unknown> | undefined);
     else if (e.type === 'browser:sign-in-required' || e.type === 'browser:verification-required') {
       // The Copilot window waits for the operator to sign in, or to show a person is there: not counted (2026-10-29).
       this.holdOf(e.sessionId)?.waitFor(`${e.type}:${e.sessionId}`);
@@ -1270,9 +1271,26 @@ export class OperatorService {
     void this.locatorFailures.dismiss(detail.key, detail.locator).catch(() => undefined);
   }
 
+  /**
+   * The model menu read, or a model chosen in it (2026-11-24): its button and its rows found what they are for, so a
+   * failure kept for them goes. Not a failure of the templates, which other ways of choosing a model go round.
+   */
+  private pickerWorked(event: string, detail: Record<string, unknown> | undefined): void {
+    if (event === 'models-read' || event === 'browser:models-read') {
+      if (!(Number(detail?.count) > 0)) return;
+    }
+    const keys: PickerLocatorKey[] = ['button', 'rows'];
+    void this.locatorFailures
+      .list()
+      .then(async (kept) => {
+        for (const k of keys) if (kept.some((f) => f.key === pickerFailureKey(k))) await this.locatorFailures.dismiss(pickerFailureKey(k));
+      })
+      .catch(() => undefined);
+  }
+
   recordLocatorFailure(detail: Record<string, unknown>): void {
     const key = detail.key;
-    if (typeof key !== 'string' || !((CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || isStepKey(key)) || typeof detail.locator !== 'string') return;
+    if (typeof key !== 'string' || !((CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || isStepKey(key) || pickerKeyOf(key)) || typeof detail.locator !== 'string') return;
     const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
     const html = str(detail.html);
     const picture = str(detail.picture);
@@ -1303,16 +1321,18 @@ export class OperatorService {
   async listLocatorFailures(): Promise<Array<Omit<LocatorFailure, 'html' | 'picture'> & { html: boolean; changed: boolean; prompt: string }>> {
     const cfg = await this.settings.load();
     const inForce = resolveChatLocators(cfg.copilot.chatLocators).locators;
+    const pickerInForce = resolvePickerLocators(cfg.copilot.pickerLocators).locators;
     // A step's (2026-11-17): changed when its locator is, or it is switched off, made not required, or gone.
     const steps = new Map(cfg.copilot.extraSteps.map((s) => [stepKey(s.id), s]));
     return (await this.locatorFailures.list()).map(({ html, picture: _picture, piece: _piece, around: _around, ...f }) => {
       const step = isStepKey(f.key) ? steps.get(f.key) : undefined;
+      const picker = pickerKeyOf(f.key);
       return {
         ...f,
         ...(step?.name ? { name: step.name } : {}),
         html: !!html && existsSync(html),
-        changed: isStepKey(f.key) ? !step || step.off || step.locator !== f.locator || (f.stopped && !step.must) : inForce[f.key as ChatLocatorKey] !== f.locator,
-        prompt: isStepKey(f.key) ? stepPrompt(step ?? { name: f.name ?? '', action: 'click' }, f.locator) : locatorPrompt(f.key as ChatLocatorKey, f.locator),
+        changed: isStepKey(f.key) ? !step || step.off || step.locator !== f.locator || (f.stopped && !step.must) : picker ? pickerInForce[picker] !== f.locator : inForce[f.key as ChatLocatorKey] !== f.locator,
+        prompt: isStepKey(f.key) ? stepPrompt(step ?? { name: f.name ?? '', action: 'click' }, f.locator) : locatorPrompt(f.key as ChatLocatorKey | PickerFailureKey, f.locator),
       };
     });
   }
@@ -4394,6 +4414,7 @@ export class OperatorService {
   private onReadingEvent(event: string, detail?: Record<string, unknown>): void {
     if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
     if (event === 'locator-found' && detail) this.locatorFound(detail);
+    if (event === 'models-read') this.pickerWorked(event, detail);
     if (event === 'sign-in-required') this.readingSignIn = true;
     if (event === 'signed-in') this.readingSignIn = false;
   }
