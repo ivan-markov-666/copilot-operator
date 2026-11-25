@@ -574,20 +574,20 @@ try {
    * The chat's name and id.
    *
    * The name is how a person finds the bot's chat in the sidebar and how the bot finds it again
-   * after a new sign-in: `op/<code>/<label>`, at most 50 characters (the app's own limit), the
+   * after a new sign-in: `op/<code>/<label>`, at most 48 characters (the app refuses 50), the
    * prefix and code intact and the label absorbing the cut. The id is the uuid in the address.
    */
   console.log('\n--- the chat: name, id, acceptance ---');
   const runId = makeRunId(new Date('2026-09-17T19:12:00'));
   for (const label of ['windows-update', 'run the full regression test suite for the payments service', 'тест на кирилица и интервали']) {
     const n = buildChatName(runId, label);
-    t.truthy(`"${label.slice(0, 30)}": within 50 and under op/<code>/`, n.length <= MAX_CHAT_NAME && n.startsWith(`op/${runId}/`), n);
+    t.truthy(`"${label.slice(0, 30)}": within the limit and under op/<code>/`, n.length <= MAX_CHAT_NAME && n.startsWith(`op/${runId}/`), n);
   }
   t.check('an empty label: just op/<code>', buildChatName(runId, ''), `op/${runId}`);
   // In Latin letters since 2026-10-19: Copilot refused Bulgarian names of 50 letters and took only a short Latin one.
   t.check('Cyrillic is transliterated, spaces become dashes', buildChatName('abcd', 'тест на кирилица'), 'op/abcd/test-na-kirilitsa');
   t.check('no label, no trailing slash', buildChatName('abcd', ''), 'op/abcd');
-  t.check('a pathological code is still cut to 50', buildChatName('x'.repeat(60), 'y').length, 50);
+  t.check('a pathological code is still cut to the limit', buildChatName('x'.repeat(60), 'y').length, 48);
   t.check("a session id's random tail is its code", chatCode('20260928-073140-ujdt'), 'ujdt');
   t.check('and the long name fits after it', buildChatName('ujdt', 'casualty-gl-datacapture-regression-suite'), 'op/ujdt/casualty-gl-datacapture-regression-suite');
   t.check('an id with no tail gives its last six letters and digits', chatCode('SESSION_ID'), 'sionid');

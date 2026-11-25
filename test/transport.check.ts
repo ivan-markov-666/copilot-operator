@@ -721,15 +721,15 @@ try {
   await section('nameChat renames through the row\'s own menu, and leaves no menu behind', async () => {
     /*
      * A chat is found again after a re-login by its name, so the rename has to happen — on the
-     * right row, capped at the UI's 50 characters. When it cannot (no Rename in the menu), it says
+     * right row, capped at what the UI takes. When it cannot (no Rename in the menu), it says
      * so, and the menu it opened does not stay over the sidebar swallowing the next click.
      * (Each no-Rename case waits out the transport's fixed 5 s for the menu item.)
      */
     const name = 'op/x/' + 'y'.repeat(60);
     const f = await fixture('name', SIDEBAR(true, 'escape'));
-    t.check('nameChat returns the name it gave', await f.transport.nameChat('ID-42', name), name.slice(0, 50));
+    t.check('nameChat returns the name it gave', await f.transport.nameChat('ID-42', name), name.slice(0, 48));
     const label = await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label');
-    t.check('the link\'s aria-label is the name, cut to 50 characters', [label?.length, label], [50, name.slice(0, 50)]);
+    t.check('the link\'s aria-label is the name, cut to 48 characters', [label?.length, label], [48, name.slice(0, 48)]);
     const c = await clicks(f.page);
     t.check('only that row\'s More was opened, and only Rename and Save were chosen', [c['More ID-42'] ?? 0, c['More OTHER-1'] ?? 0, c['Rename'] ?? 0, c['Save'] ?? 0, c['Delete'] ?? 0, c['Share'] ?? 0], [1, 0, 1, 1, 0, 0]);
     t.check('the other chat keeps its name', await f.page.locator('a[href="/chat/conversation/OTHER-1"]').getAttribute('aria-label'), 'another chat');
@@ -778,7 +778,7 @@ try {
     const asked = 'op/ab/' + 'Създай-калкулатор-с-тестове-и-документация-за-потребителя'.slice(0, 44);
     const forms = chatNameForms(asked);
     const made = buildChatName('ab', 'Създай калкулатор с тестове и документация за потребителя');
-    t.check('the bot\'s own name for a Bulgarian session: Latin letters, 50 at most', [made, /^[\x20-\x7e]+$/.test(made), made.length <= 50], ['op/ab/Sazday-kalkulator-s-testove-i-dokumentatsiya', true, true]);
+    t.check('the bot\'s own name for a Bulgarian session: Latin letters, 48 at most', [made, /^[\x20-\x7e]+$/.test(made), made.length <= 48], ['op/ab/Sazday-kalkulator-s-testove-i-dokumentatsi', true, true]);
     t.truthy('the name asked for is 50 characters, and more than 50 bytes', asked.length <= 50 && Buffer.byteLength(asked, 'utf8') > 50, { asked, letters: asked.length, bytes: Buffer.byteLength(asked, 'utf8') });
     const bytes = await fixture('name-bytes', SIDEBAR(true, 'escape', "(n) => new TextEncoder().encode(n).length > 50"));
     const took = await bytes.transport.nameChat('ID-42', asked);
@@ -786,6 +786,17 @@ try {
     t.check('the shorter form the dialog takes is the chat\'s name, and what is returned', [took, shown], [forms[1], forms[1]]);
     t.truthy('a form of the same name: its prefix, code and start kept, 50 bytes at most', !!forms[1] && asked.startsWith(forms[1]) && forms[1].startsWith('op/ab/') && Buffer.byteLength(forms[1], 'utf8') <= 50, forms);
     t.check('the refusal is on record, and no dialog or menu remains', [named(bytes.events, 'chat-name-refused').length, await bytes.page.locator('#new-session-name').count(), await bytes.page.locator('[role="menu"]:visible').count()], [1, 0, 0]);
+
+    /*
+     * The live dialog refuses a name of exactly 50 letters, with "can't be longer than 50 characters" (2026-11-23 and
+     * 11-25, three of three): each new chat's first name was refused, and the chat was called `op/<code>` alone.
+     */
+    const at50 = await fixture('name-at-50', SIDEBAR(true, 'escape', '(n) => n.length >= 50'));
+    const long = buildChatName('61es', 'chat: This is a check of the handoff of this program, in a small test project');
+    t.check('a long name of the bot: taken at once, whole, no refusal', [await at50.transport.nameChat('ID-42', long), named(at50.events, 'chat-name-refused').length, long.length], ['op/61es/chat-This-is-a-check-of-the-handoff-of-t', 0, 48]);
+    // One that takes less still: words of the label stay in the name, not the code alone.
+    const at45 = await fixture('name-at-45', SIDEBAR(true, 'escape', '(n) => n.length >= 45'));
+    t.check('a dialog that takes less: forty letters of it before the code alone', await at45.transport.nameChat('ID-42', long), 'op/61es/chat-This-is-a-check-of-the-hand');
 
     // A dialog that takes nothing: every form offered, then Cancel; the chat keeps its name and the run is told.
     const none = await fixture('name-none', SIDEBAR(true, 'escape', '() => true'));

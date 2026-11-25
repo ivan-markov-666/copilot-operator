@@ -17,8 +17,14 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-/** The UI rejects anything longer. Verified live: "Your Copilot chat name can't be longer than 50 characters". */
-export const MAX_CHAT_NAME = 50;
+/**
+ * The longest name offered. Copilot says "Your Copilot chat name can't be longer than 50 characters", and refuses one of
+ * exactly 50 with those very words: each of the three names of 50 in the live runs of 2026-11-23 and 11-25, all ASCII,
+ * while the longest taken was 47. One short of 49, which nothing has tried.
+ */
+export const MAX_CHAT_NAME = 48;
+/** A shorter form still with words of the label in it, before the prefix and the code alone. */
+const SHORT_CHAT_NAME = 40;
 
 export const CHAT_URL_RE = /\/chat\/conversation\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
@@ -76,7 +82,7 @@ export function latin(text: string): string {
  * the user's own chats. The code ties the chat to its session (see `chatCode`). The label is
  * the session's name.
  *
- * The whole thing is squeezed into 50 characters: the prefix and the code are kept intact
+ * The whole thing is squeezed into `MAX_CHAT_NAME` characters: the prefix and the code are kept intact
  * because they are what makes the chat findable, and the label absorbs the truncation.
  */
 export function buildChatName(runId: string, label: string): string {
@@ -107,10 +113,10 @@ export function buildChatName(runId: string, label: string): string {
  *
  * The dialog refuses a name it counts as longer than 50 characters, and its count is not always this file's: the
  * operator saw the bot try to save a longer one (2026-09-30, again 2026-10-17), while every name made here is 50
- * UTF-16 units at most. A counter of UTF-8 bytes takes a Cyrillic letter as two, so a Bulgarian session's name of 50
+ * UTF-16 units at most (48 since 2026-11-25). A counter of UTF-8 bytes takes a Cyrillic letter as two, so a Bulgarian session's name of 50
  * letters is a hundred to it. Rather than guess which count the page keeps, the dialog is offered these in turn and
- * the first it takes is the chat's name (see `nameChat`): 50 letters, cut whole (a letter outside the BMP is not
- * split in two); 50 bytes of UTF-8; the same in ASCII alone; the prefix and the session code alone, `op/<code>`,
+ * the first it takes is the chat's name (see `nameChat`): 48 letters, cut whole (a letter outside the BMP is not
+ * split in two); 48 bytes of UTF-8; the same in ASCII alone; 40 letters of that; the prefix and the session code alone, `op/<code>`,
  * which is what makes the chat findable and which every count agrees is short.
  */
 export function chatNameForms(name: string): string[] {
@@ -132,6 +138,7 @@ export function chatNameForms(name: string): string[] {
   add(letters(name, MAX_CHAT_NAME));
   add(bytes(name, MAX_CHAT_NAME));
   add(bytes(ascii, MAX_CHAT_NAME));
+  if (ascii.length > SHORT_CHAT_NAME) add(bytes(ascii, SHORT_CHAT_NAME));
   const code = /^op\/[a-z0-9]+(?:\/a\d+)?/i.exec(name)?.[0];
   if (code) add(code);
   return forms;

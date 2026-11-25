@@ -724,7 +724,7 @@ export const Url = {
  * Save button. Enter does **not** submit the dialog; Save must be clicked.
  *
  * The name is capped at 50 characters by the UI, which shows the inline error
- * "Your Copilot chat name can't be longer than 50 characters".
+ * "Your Copilot chat name can't be longer than 50 characters" — of one of exactly 50 too (see `MAX_CHAT_NAME`).
  */
 export const Rename = {
   /** Per-chat overflow button in the sidebar. There is one per chat, so scope it to the row. */
