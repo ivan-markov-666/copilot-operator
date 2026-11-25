@@ -11,7 +11,7 @@
  */
 import { Fragment } from 'react';
 import type { Approval, HandoffCard } from '../lib/api';
-import { declaredLines, handoffCopy, seenLines } from '../lib/handoffCopy';
+import { declaredLines, handoffCopy, seenLines, warningLines } from '../lib/handoffCopy';
 import { useT } from '../lib/i18n';
 import { CopyAll, CopyButton } from './copyButton';
 import { RichText } from './richText';
@@ -43,11 +43,20 @@ export function HandoffDetails({ card, why }: { card: HandoffCard; why: string }
         <CopyButton text={commands} what="ho.copyCommands" />
       </div>
       {(card.warnings?.length ?? 0) > 0 && (
-        <div className="err ho-warn" role="alert">
+        <div className="alert-text ho-warn" role="alert">
           <p className="small">{t('ho.warn')}</p>
           <ul className="small">
-            {card.warnings!.map((w) => (
-              <li key={w}>{w}</li>
+            {warningLines(t, card).map((w, i) => (
+              <li key={i}>
+                {w.where && <strong>{w.where}: </strong>}
+                {w.what}
+                {w.text && (
+                  <>
+                    {' '}
+                    <code dir="ltr">{w.text}</code>
+                  </>
+                )}
+              </li>
             ))}
           </ul>
         </div>

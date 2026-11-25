@@ -484,7 +484,21 @@ try {
   console.log("\n--- the operator's deny list ---");
   t.check('an invalid pattern still matches, as a substring', matchDenyPattern('please run tool([x now', ['tool([x']), 'tool([x');
   const typo = commandRefusal('please run tool([x now', 'pwsh', ['tool([x']);
-  t.truthy('and refuses the command, naming the pattern', typo !== null && typo.includes('matches deny pattern /tool([x/'), short(typo));
+  t.check('and refuses the command, naming what in it is on the list', typo, `on the operator's list of refused commands because of "tool([x" — please run tool([x now`);
+  /*
+   * In words, not the pattern (operator, 2026-11-25): a refused step said "matches deny pattern /\\bgit\\s+(?:…/" to the
+   * operator and to the chat. What the line does and the line itself; of a script, its line; and of a match over several
+   * lines, what matched.
+   */
+  const words = (cmd: string): string => commandRefusal(cmd, 'pwsh', shipped.denyPatterns) ?? '';
+  t.check('in words: a folder deleted', words('Remove-Item .\\out -Recurse -Force'), "on the operator's list of refused commands: it deletes a folder with everything in it — Remove-Item .\\out -Recurse -Force");
+  t.check('in words: the line of several', words('Write-Output hi\ngit push origin main'), "on the operator's list of refused commands: it changes something in Git that a step may not change — git push origin main");
+  t.check('in words: what matched over two lines', words('Remove-Item a\nGet-ChildItem -Recurse'), "on the operator's list of refused commands: it deletes a folder with everything in it — Remove-Item a Get-ChildItem -Recurse");
+  t.truthy('in words: git known only when it runs, and what to do', /Write the git command out in full — \$a=@\("push"\); git @a$/.test(words('$a=@("push"); git @a')), words('$a=@("push"); git @a'));
+  const listed = [...destructive, netUserAdd, ...accounts, ...gitWrites].filter((c) => matchDenyPattern(c, shipped.denyPatterns) !== null);
+  const unsaid = listed.filter((c) => !/^on the operator's list of refused commands: it /.test(words(c)) && !/^refused: /.test(words(c)));
+  t.check('every line the shipped list refuses is said in words', [listed.length > 25, unsaid], [true, []]);
+  t.check('and no pattern is in any of them', listed.filter((c) => shipped.denyPatterns.some((p) => /[\[(|]/.test(p) && words(c).includes(p))), []);
   t.truthy(
     'patterns match without regard to case',
     matchDenyPattern('REMOVE-ITEM -recurse x', ['remove-item\\s+-recurse']) !== null,

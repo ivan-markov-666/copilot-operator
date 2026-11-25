@@ -231,6 +231,13 @@ export function parkedOver(parked: Pick<Parked, 'answer'> | undefined): boolean 
  * what should be seen and how it should end, what the chat says they reach and change, the scripts in full, what the bot
  * reads in them, the lines and scripts the bot would refuse, the revision. See the server's `HandoffCard`.
  */
+export type HandoffWarning = {
+  file?: string;
+  line?: number;
+  kind: 'delete' | 'format' | 'registry' | 'shutdown' | 'executionPolicy' | 'disk' | 'feature' | 'account' | 'git' | 'gitUnknown' | 'own' | 'said';
+  text?: string;
+  why?: string;
+};
 export type HandoffCard = {
   revision?: number;
   why?: string;
@@ -244,7 +251,7 @@ export type HandoffCard = {
   files: Array<{ path: string; abs?: string; text?: string; cut?: boolean; problem?: string }>;
   seen?: { network?: string; platform?: string };
   outside?: boolean;
-  warnings?: string[];
+  warnings?: Array<HandoffWarning | string>;
 };
 /** How the operator answered a handoff: ran it, sent it back for a correction, or will not run it. */
 export type HandoffOutcome = 'ran' | 'revise' | 'declined';

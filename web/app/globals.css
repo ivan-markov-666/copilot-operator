@@ -25,6 +25,7 @@
   --ok: #1f6b47;
   --ok-soft: #e2f3ea;
   --warn: #855600;
+  --alert: #a84300;
   --warn-soft: #fbf0d8;
   --bad: #ac2a2a;
   --bad-soft: #fbe7e7;
@@ -67,6 +68,7 @@
   --ok: #7dd5a4;
   --ok-soft: #163126;
   --warn: #f1c26e;
+  --alert: #ffa64d;
   --warn-soft: #2f281a;
   --bad: #ff8f8f;
   --bad-soft: #3a1f25;
@@ -96,6 +98,7 @@
   --bg: #f6fbff;
   --ok: #14502f;
   --warn: #663e00;
+  --alert: #7a2e00;
   --bad: #8a1717;
   --shadow: none;
 }
@@ -111,6 +114,7 @@
   --code: #03080e;
   --ok: #9ff0bd;
   --warn: #ffd58f;
+  --alert: #ffc080;
   --bad: #ffb3b3;
   --shadow: none;
 }
@@ -407,7 +411,8 @@ details[open] > summary { margin-bottom: 6px; }
 .task:target { background: var(--accent-soft); border-radius: 0 10px 10px 0; padding: 8px 8px 8px 14px; }
 
 .summary { background: var(--ok-soft); border: 1px solid var(--ok); border-radius: 9px; padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; }
-.reason { color: var(--bad); }
+/* An alert on a card — what it reaches, what the bot would refuse — is not an error: orange (operator, 2026-11-24). */
+.reason, .alert-text { color: var(--alert); }
 
 .approval {
   background: var(--warn-soft);

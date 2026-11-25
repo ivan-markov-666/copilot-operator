@@ -220,6 +220,8 @@ export type KerriganBriefFacts = KerriganFacts & {
   maxSends: number;
   /** How the chats' commands run, as the person's Settings say. */
   commands: 'ask' | 'auto';
+  /** Settings pass the lists over in the chats she directs (2026-11-25). */
+  rulesIgnored?: boolean;
 };
 
 /**
@@ -277,6 +279,10 @@ ${
   f.commands === 'ask'
     ? 'The person\'s Settings ask them before each command a chat proposes: they press Run or Skip on a card. Those cards are theirs, not yours; the work waits for them.'
     : 'The person\'s Settings run the chats\' commands without asking, within the rules above. A command that reaches a platform with their access (Azure, GitHub, Jira, publishing a package) may still wait for them on a card: that card is theirs, not yours.'
+}${
+  f.rulesIgnored
+    ? ' The person has set the program\'s lists aside for the chats you direct: any program may be started, and a script that is part of the work runs like a command, so nothing needs to be handed over to the person to run. The foundations above stand, Git\'s included.'
+    : ''
 } Scripts a chat hands over for the person to run themselves, Git's password window and a sign-in are theirs too. The cards that come to you are the chats' questions, their plans, and subtasks cut off for a technical reason.`;
 }
 

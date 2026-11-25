@@ -2002,6 +2002,8 @@ function ExecutionSection() {
   const [kerriganResult, setKerriganResult] = useState<'copy' | 'exchange'>('copy');
   /** When Kerrigan cannot decide by herself (`execution.kerriganAsks`, 2026-11-23): ask, decide herself, or the task fails. */
   const [kerriganAsks, setKerriganAsks] = useState<'ask' | 'decide' | 'fail'>('ask');
+  /** When the bot's lists are passed over (`execution.ignoreRules`, 2026-11-25): never, when Kerrigan directs, always. */
+  const [ignoreRules, setIgnoreRules] = useState<'never' | 'kerrigan' | 'always'>('never');
   /** A subtask cut off for a technical reason (two chats, 2026-10-25): what is done, how many times, after how long. */
   const [subRetryMode, setSubRetryMode] = useState<SubtaskRetryMode>('ask');
   const [subRetries, setSubRetries] = useState(2);
@@ -2057,7 +2059,8 @@ function ExecutionSection() {
         setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run'; kerriganResult?: 'copy' | 'exchange'; kerriganAsks?: string };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run'; kerriganResult?: 'copy' | 'exchange'; kerriganAsks?: string; ignoreRules?: string };
+        setIgnoreRules(exec.ignoreRules === 'kerrigan' || exec.ignoreRules === 'always' ? exec.ignoreRules : 'never');
         setKerriganResult(exec.kerriganResult === 'exchange' ? 'exchange' : 'copy');
         setKerriganAsks(exec.kerriganAsks === 'decide' || exec.kerriganAsks === 'fail' ? exec.kerriganAsks : 'ask');
         setWrittenScripts(exec.writtenScripts === 'run' ? 'run' : 'ask');
@@ -2121,7 +2124,7 @@ function ExecutionSection() {
   const saveSubRetryWaitLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetryWaitSec', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts' | 'kerriganResult' | 'kerriganAsks', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts' | 'kerriganResult' | 'kerriganAsks' | 'ignoreRules', value: string) => write('execution', key, value);
   const runChoice: RunChoice = startMode === 'confirm' ? 'confirm' : writtenScripts === 'run' ? 'unattended' : 'unattended-ask';
 
   /** The number fields, in the order a task meets them. */
@@ -2371,6 +2374,28 @@ function ExecutionSection() {
           <option value="fail">{t('exec.kerriganAsksFail')}</option>
         </select>
       </Field>
+
+      {/*
+        The bot's lists passed over (operator, 2026-11-25: "an option that passes over the runner's policy — mainly when
+        Kerrigan directs, but for the others too"). What is never passed over: `src/config/runRules.ts`.
+      */}
+      <Field id="ignore-rules" label={t('exec.ignoreRules')} info={t('exec.ignoreRulesWhy')}>
+        <select
+          id="ignore-rules"
+          value={ignoreRules}
+          onChange={(e) => {
+            const v = e.target.value === 'kerrigan' || e.target.value === 'always' ? e.target.value : 'never';
+            setIgnoreRules(v);
+            void saveExecution('ignoreRules', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="never">{t('exec.ignoreRulesNever')}</option>
+          <option value="kerrigan">{t('exec.ignoreRulesKerrigan')}</option>
+          <option value="always">{t('exec.ignoreRulesAlways')}</option>
+        </select>
+      </Field>
+      {ignoreRules !== 'never' && <p className="alert-text small" id="ignore-rules-on">{t('exec.ignoreRulesOn')}</p>}
 
       {/*
         A subtask cut off for a technical reason (operator, 2026-10-25): the chat's reply lost, a command that could not

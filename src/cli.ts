@@ -23,6 +23,7 @@ import { runSession } from './orchestrator/taskRunner.js';
 import { SessionStore } from './session/store.js';
 import { settingsOf, SettingsUnusableError } from './api/settings.js';
 import { PolicyLockUnusableError } from './config/lockedPolicy.js';
+import { runRules } from './config/runRules.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
@@ -490,6 +491,8 @@ program
   .action(async (configPath: string, opts: { unattended?: boolean }) => {
     const cfg = await loadConfig(configPath);
     if (opts.unattended) cfg.execution.mode = 'unattended';
+    // The lists passed over, where Settings say always (2026-11-25).
+    Object.assign(cfg.execution, runRules(cfg, { chat: false, kerrigan: false }));
     if (!cfg.resolved.taskText.trim()) {
       throw new Error(`${cfg.configPath} has no "task". Add one, inline or as { file: ... }.`);
     }
@@ -503,6 +506,7 @@ program
         mode: 'unattended',
         allowedPrograms: cfg.execution.allowedPrograms,
         isolation: cfg.execution.isolation,
+        rulesIgnored: !!cfg.execution.rulesIgnored,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       });
       if (blocked) throw new Error(`${blocked}\n\nOr drop --unattended and approve the steps as they come.`);
@@ -540,6 +544,7 @@ program
       runWithoutAsking: cfg.execution.runWithoutAsking,
       scripts: cfg.execution.scripts,
       writtenScripts: cfg.execution.writtenScripts,
+      rulesIgnored: !!cfg.execution.rulesIgnored,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

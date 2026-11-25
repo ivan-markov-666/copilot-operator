@@ -20,14 +20,15 @@
  * A step that is running, and a card already put to the operator, go on as they began. The locked policy, when there is
  * one, is in what was saved (`loadConfigObject`), so it is taken with the rest and still wins.
  */
-import { chatDenyPatterns, type ResolvedConfig } from './schema.js';
+import { runRules } from './runRules.js';
+import type { ResolvedConfig } from './schema.js';
 
 /** Taken at once, by section; `*` is every field of it. */
 const NOW: Record<string, readonly string[] | '*'> = {
   execution: [
     'networkFetch', 'questions', 'commandTimeoutSec', 'idleTimeoutSec', 'longCommandTimeoutSec', 'longIdleTimeoutSec',
     'maxStepTimeoutSec', 'isolation', 'passEnv', 'allowedPrograms', 'readOnlyPrograms', 'runWithoutAsking', 'scripts',
-    'writtenScripts', 'denyPatterns',
+    'writtenScripts', 'denyPatterns', 'ignoreRules',
   ],
   limits: '*',
   pacing: '*',
@@ -65,12 +66,14 @@ export class LiveSettings {
 
   /**
    * `cfg`: the run's own; `chat`: a conversation of the workbench's chat, whose deny patterns leave its git to the
-   * operator; `loaded`: the settings the run was made from, before that.
+   * operator; `loaded`: the settings the run was made from, before that; `kerrigan`: a conversation she directs, whose
+   * rules Settings may pass over (2026-11-25).
    */
   constructor(
     readonly cfg: ResolvedConfig,
     private readonly chat: boolean,
     loaded: ResolvedConfig = cfg,
+    private readonly kerrigan = false,
   ) {
     this.last = JSON.parse(JSON.stringify(loaded)) as Record<string, Record<string, unknown> | undefined>;
   }
@@ -98,10 +101,11 @@ export class LiveSettings {
         const kind = classOf(section, key);
         change[kind].push(`${section}.${key}`);
         if (kind !== 'now' || !target[section]) continue;
-        const value = from[key];
-        target[section][key] = section === 'execution' && key === 'denyPatterns' && this.chat && Array.isArray(value) ? chatDenyPatterns(value as string[]) : value;
+        target[section][key] = from[key];
       }
     }
+    // The lists and the boxes as this run goes by them: a chat's git, and what Settings pass over, worked out again.
+    if (change.now.some((name) => name.startsWith('execution.')) && target.execution) Object.assign(target.execution, runRules(saved, { chat: this.chat, kerrigan: this.kerrigan }));
     this.last = JSON.parse(JSON.stringify(saved)) as Record<string, Record<string, unknown> | undefined>;
     if (change.now.length > 0) {
       this.cfg.policyLock = saved.policyLock;

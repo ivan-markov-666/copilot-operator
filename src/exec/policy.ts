@@ -22,6 +22,7 @@ import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
 import { ownScriptRefusal, scratchScriptRefusal, scriptFileRefusal, type ScriptRun } from './scriptFiles.js';
 import type { ScriptRules, WrittenScriptsChoice } from './scriptKinds.js';
+import { DENY_DEFAULTS, type DenyKind } from '../config/schema.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { readOnlyRefusal, readOnlyUnaskedRefusal, readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
@@ -78,7 +79,12 @@ export type PolicyConfig = {
    * (`ask`, the default), or run it as any other step (`run`). A run that asks before every step asks about these too.
    */
   writtenScripts?: WrittenScriptsChoice;
+  /** The lists passed over in this run, by the operator's setting (2026-11-25): an empty allowlist is their choice. See `config/runRules.ts`. */
+  rulesIgnored?: boolean;
 };
+
+/** No list of programs, and by the operator's choice: what stands in for the list where nobody watches is not asked for. */
+const listPassedOver = (cfg: { rulesIgnored?: boolean; allowedPrograms: string[] }): boolean => !!cfg.rulesIgnored && cfg.allowedPrograms.length === 0;
 
 export type NetworkFetchChoice = 'ask' | 'refuse' | 'run';
 
@@ -137,31 +143,108 @@ export function gitAsRead(command: string, shell: Shell): Array<string | null> {
 }
 
 /**
+ * What in a text the deny list refuses: the text it matched as written (`text` with its place in it — in the line with
+ * its quotes out, whose line breaks are the same), a git invocation as git reads it, or a git whose command is known
+ * only when it runs.
+ */
+export type DenyHit = { pattern: string; as: 'written'; text: string; line: number } | { pattern: string; as: 'read'; text: string } | { pattern: string; as: 'unknown' };
+
+/** What the deny list refuses in a text, first first, or null. */
+export function denyHit(command: string, shell: Shell, denyPatterns: string[]): DenyHit | null {
+  const plain = command.replace(/\bgit\.exe\b/gi, 'git').replace(/["'`‘’“”]/g, '');
+  for (const text of [command, plain]) {
+    const pattern = matchDenyPattern(text, denyPatterns);
+    if (pattern === null) continue;
+    const at = placeOf(text, pattern);
+    return { pattern, as: 'written', text: at.text, line: text.slice(0, at.index).split('\n').length };
+  }
+  for (const read of gitAsRead(command, shell)) {
+    const pattern = matchDenyPattern(read ?? 'git push', denyPatterns);
+    if (pattern !== null) return read === null ? { pattern, as: 'unknown' } : { pattern, as: 'read', text: read };
+  }
+  return null;
+}
+
+/** Where a pattern that matches a text does, and what it matched. */
+function placeOf(text: string, pattern: string): { index: number; text: string } {
+  try {
+    const m = new RegExp(pattern, 'i').exec(text);
+    return { index: m?.index ?? 0, text: m?.[0] ?? '' };
+  } catch {
+    const index = Math.max(0, text.toLowerCase().indexOf(pattern.toLowerCase()));
+    return { index, text: text.slice(index, index + pattern.length) };
+  }
+}
+
+/** What the deny list refuses in a text, in words: what it does, the line of the text (left out where it is not known), and the line itself. */
+export type DenyWords = { kind: DenyKind | 'own' | 'gitUnknown'; line?: number; text?: string; matched: string };
+
+/** The most of one refused line that is quoted. */
+const MAX_QUOTED = 200;
+
+/** What words the deny list refuses do: the first default pattern that says so of them, else it is the list itself. */
+function kindOf(...said: string[]): DenyKind | 'own' {
+  for (const text of said) {
+    const hit = DENY_DEFAULTS.find((d) => new RegExp(d.pattern, 'i').test(text));
+    if (hit) return hit.kind;
+  }
+  return 'own';
+}
+
+/**
+ * What the deny list refuses in a text, in words, or null (operator, 2026-11-25: the card for commands to run oneself,
+ * and then every refused step, showed the pattern — a regular expression nobody reads). What matched over several lines
+ * is quoted as it matched: its first line alone does not say why.
+ */
+export function denyWords(text: string, shell: Shell, denyPatterns: string[]): DenyWords | null {
+  const hit = denyHit(text, shell, denyPatterns);
+  if (!hit) return null;
+  const lines = text.split(/\r?\n/);
+  let at = hit.as === 'written' ? hit.line : 0;
+  if (hit.as !== 'written') {
+    const read = hit.as === 'read' ? hit.text : null;
+    at = lines.findIndex((l) => gitAsRead(l, shell).includes(read)) + 1;
+  }
+  const matched = hit.as === 'unknown' ? '' : hit.text.replace(/\s+/g, ' ').trim();
+  const line = (lines[at - 1] ?? '').trim();
+  const several = hit.as === 'written' && hit.text.trim().includes('\n');
+  const quoted = (several ? matched : line || matched).slice(0, MAX_QUOTED);
+  return {
+    kind: hit.as === 'unknown' ? 'gitUnknown' : kindOf(hit.text, line),
+    ...(at > 0 ? { line: at } : {}),
+    ...(quoted ? { text: quoted } : {}),
+    matched: matched.slice(0, MAX_QUOTED),
+  };
+}
+
+/** The same, as the chat and the records are told it. */
+const DENY_SAID: Record<Exclude<DenyWords['kind'], 'own'>, string> = {
+  delete: 'it deletes a folder with everything in it',
+  format: 'it formats a drive',
+  registry: 'it changes the Windows registry',
+  shutdown: 'it shuts down or restarts the computer',
+  executionPolicy: 'it lets PowerShell run any script without restriction',
+  disk: 'it changes disks, the boot settings or the shadow copies',
+  feature: 'it turns off a Windows feature',
+  account: 'it creates a Windows account or adds one to a group',
+  git: 'it changes something in Git that a step may not change',
+  gitUnknown:
+    'it runs git with its command — or the words that decide whether it changes something — known only when it runs (a variable, a splat, ' +
+    'Start-Process), and git commands that change something are refused. Write the git command out in full',
+};
+
+/**
  * Why the operator's deny list refuses a line, or null: the line as written, the line with `git.exe` read as `git` and
  * its quotes taken out (`cmd /c "git.exe push"`), and every git invocation as git reads it (`gitAsRead`). A git whose
  * subcommand is known only when it runs is refused wherever the list refuses `git push`, the plainest git write.
  */
 export function denyPatternRefusal(command: string, shell: Shell, denyPatterns: string[]): string | null {
-  const said = (hit: string): string => `matches deny pattern /${hit}/`;
-  const raw = matchDenyPattern(command, denyPatterns);
-  if (raw) return said(raw);
-  const plain = matchDenyPattern(command.replace(/\bgit\.exe\b/gi, 'git').replace(/["'`\u2018\u2019\u201c\u201d]/g, ''), denyPatterns);
-  if (plain) return said(plain);
-  for (const read of gitAsRead(command, shell)) {
-    if (read === null) {
-      const writes = matchDenyPattern('git push', denyPatterns);
-      if (writes) {
-        return (
-          `matches deny pattern /${writes}/: this runs git with its command — or the words that decide whether it changes something — known only ` +
-          'when it runs (a variable, a splat, Start-Process), and git commands that change something are refused. Write the git command out in full.'
-        );
-      }
-      continue;
-    }
-    const hit = matchDenyPattern(read, denyPatterns);
-    if (hit) return `${said(hit)} (as git reads it: ${read.slice(0, 120)})`;
-  }
-  return null;
+  const w = denyWords(command, shell, denyPatterns);
+  if (!w) return null;
+  const list = "on the operator's list of refused commands";
+  // One of the operator's own: what in the line it is about, which is all there is to say of it.
+  const said = w.kind === 'own' ? `${list}${w.matched ? ` because of "${w.matched}"` : ''}` : `${list}: ${DENY_SAID[w.kind]}`;
+  return w.text ? `${said} — ${w.text}` : said;
 }
 
 /** `git config`'s switches that read, and the ones that take the next word as their value. */
@@ -346,13 +429,13 @@ export function checkCommandRefusal(
 export function modelCheckRefusal(
   command: string,
   shell: Shell,
-  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms' | 'scripts'> & { questions?: 'ask' | 'agree' },
+  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms' | 'scripts' | 'rulesIgnored'> & { questions?: 'ask' | 'agree' },
   confinement: Confinement,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   return (
     checkCommandRefusal(command, shell, cfg, confinement, env) ??
-    inlineCodeRefusal(command) ??
+    (listPassedOver(cfg) ? null : inlineCodeRefusal(command)) ??
     ownScriptRefusal(command, confinement.cwd, confinement.workStartedAt, shell, { rules: cfg.scripts, reviewer: true, screen: writtenScriptScreen(cfg, confinement, env) })
   );
 }
@@ -439,21 +522,21 @@ export function scriptNetworkReason(command: string, cwd: string): string | null
  * say in the operator's language, with where it is changed, instead of offering "Run this and the rest" to refuse it.
  */
 export type UnattendedBlock = 'lock' | 'isolation' | 'allowlist';
-export function unattendedBlock(cfg: Pick<PolicyConfig, 'allowedPrograms' | 'isolation' | 'lockedToConfirm'>): UnattendedBlock | null {
+export function unattendedBlock(cfg: Pick<PolicyConfig, 'allowedPrograms' | 'isolation' | 'lockedToConfirm' | 'rulesIgnored'>): UnattendedBlock | null {
   if (cfg.lockedToConfirm) return 'lock';
   if (unattendedIsolationRefusal('unattended', cfg.isolation ?? 'none')) return 'isolation';
-  if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) return 'allowlist';
+  if (!cfg.rulesIgnored && (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0)) return 'allowlist';
   return null;
 }
 
-export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation' | 'lockedToConfirm'>): string | null {
+export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation' | 'lockedToConfirm' | 'rulesIgnored'>): string | null {
   if (cfg.mode !== 'unattended') return null;
   if (cfg.lockedToConfirm) {
     return 'refused: this machine\'s policy.lock.json forbids unattended runs. Run this task step by step.';
   }
   const unisolated = unattendedIsolationRefusal(cfg.mode, cfg.isolation ?? 'none');
   if (unisolated) return unisolated;
-  if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) {
+  if (!cfg.rulesIgnored && (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0)) {
     return (
       'refused: an unattended run requires execution.allowedPrograms to name the programs this project ' +
       'may start. With the allowlist empty and nobody watching, nothing limits what a step can run. ' +
@@ -511,7 +594,7 @@ export function staticCheck(
   if (cfg.mode === 'unattended') {
     const precondition = unattendedPrecondition(cfg);
     if (precondition) return { action: 'skip', reason: precondition };
-    const inline = inlineCodeRefusal(step.cmd);
+    const inline = listPassedOver(cfg) ? null : inlineCodeRefusal(step.cmd);
     if (inline) return { action: 'skip', reason: inline };
   }
   return null;

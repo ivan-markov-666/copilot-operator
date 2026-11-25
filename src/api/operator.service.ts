@@ -47,6 +47,7 @@ import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
 import { chatNotice } from '../session/chatNotice.js';
+import { runRules } from '../config/runRules.js';
 import { kerriganBrief, kerriganFileName, kerriganPersona, type KerriganFacts } from '../plan/kerrigan.js';
 import { branchChanges, gitCounts, workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
@@ -175,7 +176,7 @@ import { exportFileName as homeExportName, exportPlan, exportSizes, writeExport 
 import type { Writable } from 'node:stream';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
-import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
+import type { ResolvedConfig } from '../config/schema.js';
 import { LiveSettings, mergedChange, type LiveChange } from '../config/live.js';
 
 /**
@@ -212,6 +213,7 @@ function stepRules(cfg: ResolvedConfig): Omit<PolicyConfig, 'mode'> {
     runWithoutAsking: cfg.execution.runWithoutAsking,
     scripts: cfg.execution.scripts,
     writtenScripts: cfg.execution.writtenScripts,
+    rulesIgnored: !!cfg.execution.rulesIgnored,
   };
 }
 
@@ -550,6 +552,7 @@ export class OperatorService {
     else if (e.type === 'browser:locator-missing' && e.data) this.recordLocatorFailure(e.data);
     else if (e.type === 'browser:locator-found' && e.data) this.locatorFound(e.data);
     else if (e.type === 'browser:models-read' || e.type === 'browser:model-selected') this.pickerWorked(e.type, e.data as Record<string, unknown> | undefined);
+    else if (e.type === 'browser:chat-named' || e.type === 'browser:attached' || e.type === 'browser:locator-worked-around') this.chatPartWorked(e.type.slice('browser:'.length), e.data as Record<string, unknown> | undefined);
     else if (e.type === 'browser:sign-in-required' || e.type === 'browser:verification-required') {
       // The Copilot window waits for the operator to sign in, or to show a person is there: not counted (2026-10-29).
       this.holdOf(e.sessionId)?.waitFor(`${e.type}:${e.sessionId}`);
@@ -1173,7 +1176,7 @@ export class OperatorService {
       const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
       runId = runGroup.id;
       const before = await this.store.getSession(sessionId);
-      const earlyRefusal = !before ? 'no such session' : queuedToRun(before).length === 0 ? 'no queued tasks' : await this.unattendedRefusal(mode);
+      const earlyRefusal = !before ? 'no such session' : queuedToRun(before).length === 0 ? 'no queued tasks' : await this.unattendedRefusal(mode, before);
       if (earlyRefusal) {
         this.releaseBrowser(claim.holder);
         // No run log for a session that does not exist: the id is the caller's, and may be anything.
@@ -1279,11 +1282,26 @@ export class OperatorService {
     if (event === 'models-read' || event === 'browser:models-read') {
       if (!(Number(detail?.count) > 0)) return;
     }
-    const keys: PickerLocatorKey[] = ['button', 'rows'];
+    this.dismissFailuresOf((['button', 'rows'] as PickerLocatorKey[]).map(pickerFailureKey));
+  }
+
+  /**
+   * A part of the chat that did what it is for (2026-11-24: a file's "uploaded" stayed red in Settings for days after the
+   * page took files again): a conversation named, a file attached and seen uploaded, or a locator the bot found another
+   * way round. A failure kept for its locators goes: there is nothing for the operator to do.
+   */
+  private chatPartWorked(event: string, detail: Record<string, unknown> | undefined): void {
+    if (event === 'chat-named') this.dismissFailuresOf(['conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave']);
+    else if (event === 'attached') this.dismissFailuresOf(detail?.uploaded === true ? ['uploadInput', 'attachment', 'attachmentUploaded'] : []);
+    else if (typeof detail?.key === 'string') this.dismissFailuresOf([detail.key]);
+  }
+
+  private dismissFailuresOf(keys: string[]): void {
+    if (keys.length === 0) return;
     void this.locatorFailures
       .list()
       .then(async (kept) => {
-        for (const k of keys) if (kept.some((f) => f.key === pickerFailureKey(k))) await this.locatorFailures.dismiss(pickerFailureKey(k));
+        for (const k of keys) if (kept.some((f) => f.key === k)) await this.locatorFailures.dismiss(k);
       })
       .catch(() => undefined);
   }
@@ -1476,7 +1494,9 @@ export class OperatorService {
 
     const loaded = await this.settings.load();
     // A chat conversation's git is the operator's: switching branches and committing are allowed there (2026-10-17).
-    const cfg: ResolvedConfig = session.kind === 'chat' ? { ...loaded, execution: { ...loaded.execution, denyPatterns: chatDenyPatterns(loaded.execution.denyPatterns) } } : loaded;
+    // And the lists passed over where Settings say so, in a conversation Kerrigan directs or always (2026-11-25).
+    const goesBy = { chat: session.kind === 'chat', kerrigan: !!session.kerrigan };
+    const cfg: ResolvedConfig = { ...loaded, execution: { ...loaded.execution, ...runRules(loaded, goesBy) } };
     // The run's own settings; a save while it goes on changes them in place (`saveSettings`), and these rules with them.
     const runCfg = { ...cfg, execution: { ...cfg.execution, mode } } as ResolvedConfig;
     /*
@@ -1492,7 +1512,7 @@ export class OperatorService {
      * signed in in the morning it carries on by itself. The wait is not counted, and the run's Stop ends it.
      */
     if (session.queueItem) runCfg.copilot = { ...runCfg.copilot, signInTimeoutSec: Math.max(runCfg.copilot.signInTimeoutSec, QUEUE_SIGN_IN_WAIT_SEC) };
-    const live = new LiveSettings(runCfg, session.kind === 'chat', loaded);
+    const live = new LiveSettings(runCfg, goesBy.chat, loaded, goesBy.kerrigan);
     const policy: PolicyConfig = { mode, ...stepRules(runCfg) };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -1804,11 +1824,13 @@ export class OperatorService {
    * rule (`unattendedPrecondition`) asked of the settings as they are at this moment. One place, for
    * the batch and for "Run again from here", which has to ask it before it moves anything.
    */
-  private async unattendedRefusal(mode: 'confirm' | 'unattended'): Promise<string | null> {
+  private async unattendedRefusal(mode: 'confirm' | 'unattended', session: Pick<Session, 'kind' | 'kerrigan'>): Promise<string | null> {
     const cfg = await this.settings.load();
+    const rules = runRules(cfg, { chat: session.kind === 'chat', kerrigan: !!session.kerrigan });
     return unattendedPrecondition({
       mode,
-      allowedPrograms: cfg.execution.allowedPrograms,
+      allowedPrograms: rules.allowedPrograms,
+      rulesIgnored: rules.rulesIgnored,
       isolation: cfg.execution.isolation,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
     });
@@ -2056,7 +2078,7 @@ export class OperatorService {
     const cfg = await this.settings.load();
     const { facts } = await this.kerriganFacts();
     const mode = this.running.get(this.runKey(sessionId))?.mode ?? cfg.execution.mode;
-    return kerriganBrief({ ...facts, language: LANGUAGE_NAMES[lang ?? 'en'] ?? 'English', maxSends: cfg.limits.maxKerriganSends ?? 6, commands: mode === 'unattended' ? 'auto' : 'ask' });
+    return kerriganBrief({ ...facts, language: LANGUAGE_NAMES[lang ?? 'en'] ?? 'English', maxSends: cfg.limits.maxKerriganSends ?? 6, commands: mode === 'unattended' ? 'auto' : 'ask', rulesIgnored: runRules(cfg, { chat: true, kerrigan: true }).rulesIgnored });
   }
 
   /** What Kerrigan is told of this machine: its limits, the projects with their notes, the skills; a skill chosen, too. */

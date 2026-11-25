@@ -2580,6 +2580,15 @@ try {
     await kerriganAsks.selectOption('fail');
     await waitFor('the choice to be saved', async () => ((await h.call<{ raw: { execution?: { kerriganAsks?: string } } }>('GET', '/settings')).raw.execution?.kerriganAsks === 'fail') || null, 10_000).catch(() => undefined);
     t.check('"the task stops", when chosen, saved beside the other', [(await h.call<{ raw: { execution?: { kerriganAsks?: string; kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganAsks, (await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult], ['fail', 'exchange']);
+    // The bot's lists passed over (2026-11-25): never, by default, with nothing said; chosen, it is saved and an alert says what it means.
+    const ignoreRules = page.locator('#ignore-rules');
+    t.check('the rules for commands: kept, by default', [await ignoreRules.inputValue(), await ignoreRules.locator('option').allTextContents(), await page.locator('#ignore-rules-on').count()], ['never', [en['exec.ignoreRulesNever'], en['exec.ignoreRulesKerrigan'], en['exec.ignoreRulesAlways']], 0]);
+    await ignoreRules.selectOption('kerrigan');
+    const ignoring = async () => (await h.call<{ raw: { execution?: { ignoreRules?: string } } }>('GET', '/settings')).raw.execution?.ignoreRules;
+    await waitFor('the choice to be saved', async () => ((await ignoring()) === 'kerrigan') || null, 10_000).catch(() => undefined);
+    t.check('set aside when Kerrigan directs: saved, and said in an alert', [await ignoring(), await page.locator('#ignore-rules-on').textContent()], ['kerrigan', en['exec.ignoreRulesOn']]);
+    await ignoreRules.selectOption('never');
+    await waitFor('the choice to be taken back', async () => ((await ignoring()) === 'never') || null, 10_000).catch(() => undefined);
     // Saved is not yet shown: the page lists it once it has read the list again (seen to lag on a loaded machine, 2026-10-28).
     await page.locator('.skill-entry:not(.skill-new)').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.check('and listed there, the form empty again', [await page.locator('.skill-entry:not(.skill-new)').count(), await add.getByLabel(en['skills.name']!, { exact: true }).inputValue()], [1, '']);

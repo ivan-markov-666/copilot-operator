@@ -288,9 +288,14 @@ export const DefaultChatLocators: ChatLocators = {
   stop: 'button[aria-label="Stop generating"]',
   conversationLink: 'a[href*="/chat/conversation/"]',
   chatMore: `button[data-chat-history-more-button-conversation-id="${CHAT_ID}"]`,
-  renameItem: 'role=menuitem[name="Rename"]',
+  /*
+   * By the text or the label, not by Playwright's `role=` (work, 2026-11-20 and 24: both had to be replaced by hand): a
+   * `role=` finds nothing while a part of the page around it is aria-hidden, nor a "Save" whose label says more. Whatever
+   * the button is like inside (`button:text-is("Save")` alone finds none whose text is in a span of its own).
+   */
+  renameItem: '[role="menuitem"][aria-label="Rename"], [role="menuitem"]:text-is("Rename"), [role="menuitem"]:has(:text-is("Rename"))',
   renameInput: '#new-session-name',
-  renameSave: 'role=button[name="Save"]',
+  renameSave: 'button:text-is("Save"), button:has(:text-is("Save")), button[aria-label="Save"], [role="button"]:text-is("Save"), input[type="submit"][value="Save"]',
   uploadInput: '#upload-file-button',
   /*
    * The attached file in the box, before Send (2026-11-17: the work page shows it as a card with the name without
@@ -299,15 +304,17 @@ export const DefaultChatLocators: ChatLocators = {
    */
   attachment:
     `div.fx-Attachment[aria-label="${FILE_NAME}"], [data-test-id="chat-input-wrapper"] :text-is("${FILE_STEM}"), ` +
-    `[data-test-id="chat-input-wrapper"] :text-is("${FILE_NAME}")`,
+    `[data-test-id="chat-input-wrapper"] :text-is("${FILE_NAME}"), [data-composer-chip]:has(button[aria-label="Remove ${FILE_NAME}"])`,
   /*
    * The same, once it is uploaded: the old one's id starts with SPO_ then; on the new page, nothing in the box's wrapper
-   * shows progress any more (a spinner, a progress bar: role=progressbar).
+   * shows progress any more (a spinner, a progress bar: role=progressbar). Since 2026-11-20 at work, a chip
+   * (`data-composer-chip`) with a "Remove <file's name>" button: the same, once nothing in it shows progress.
    */
   attachmentUploaded:
     `div.fx-Attachment[aria-label="${FILE_NAME}"][id^="SPO_"], ` +
     `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_STEM}"), ` +
-    `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_NAME}")`,
+    `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_NAME}"), ` +
+    `[data-composer-chip]:not(:has([role="progressbar"])) button[aria-label="Remove ${FILE_NAME}"]`,
   /*
    * Copilot's own word that an upload failed (live test 2026-11-23): a red bar above the box, "The upload service is busy
    * right now. Wait a moment, then try again.", with "Try again" and "Dismiss upload message". The bot waited two minutes

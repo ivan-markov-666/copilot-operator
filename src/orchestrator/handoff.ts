@@ -18,10 +18,10 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { Handoff } from '../protocol/replySchema.js';
-import type { HandoffCard, HandoffOutcome } from '../session/model.js';
+import type { HandoffCard, HandoffOutcome, HandoffWarning } from '../session/model.js';
 import { dangerousRefusal } from '../exec/dangerous.js';
 import { botSelfRefusal, networkFetchReason } from '../exec/network.js';
-import { denyPatternRefusal } from '../exec/policy.js';
+import { denyWords } from '../exec/policy.js';
 import { platformReason } from '../exec/platforms.js';
 import { codeFilesRun, shellScriptsRun } from '../exec/scriptFiles.js';
 import { endsTheShell } from '../exec/stops.js';
@@ -37,11 +37,18 @@ const inside = (roots: string[], path: string): boolean =>
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
   });
 
-/** Why the runner would refuse this text outright, or null. */
-function refusedText(text: string, denyPatterns: string[]): string | null {
-  const deny = denyPatternRefusal(text, 'pwsh', denyPatterns);
-  const why = dangerousRefusal(text) ?? botSelfRefusal(text) ?? (deny ? `refused: ${deny}` : null);
-  return why ? why.replace(/^refused:\s*/, '') : null;
+/**
+ * Why the runner would refuse this text outright, or null. Of the deny list: what the line does and the line itself, in
+ * the operator's language (2026-11-25) — the card showed the pattern, a regular expression nobody reads. `line` is of
+ * the text: the place of the refused line in it, left out where it is not known.
+ */
+function refusedText(text: string, denyPatterns: string[]): Omit<HandoffWarning, 'file'> | null {
+  const why = dangerousRefusal(text) ?? botSelfRefusal(text);
+  if (why) return { kind: 'said', why: why.replace(/^refused:\s*/, '') };
+  const words = denyWords(text, 'pwsh', denyPatterns);
+  if (!words) return null;
+  const { matched: _matched, ...shown } = words;
+  return shown;
 }
 
 /**
@@ -52,7 +59,7 @@ function refusedText(text: string, denyPatterns: string[]): string | null {
 export function handoffCard(h: Handoff, cwd: string, roots: string[], denyPatterns: string[], revision = 1): HandoffCard {
   const folder = resolve(cwd, h.cwd ?? '.');
   const texts: string[] = [...h.commands];
-  const warnings: string[] = [];
+  const warnings: HandoffWarning[] = [];
   /*
    * The scripts the chat names, and every one its lines run besides (2026-11-03): `Push-Location 'rules-engine';
    * .\switch-env.ps1 qa` went on a card with no script on it, and what the script did was found out when it stopped
@@ -77,15 +84,16 @@ export function handoffCard(h: Handoff, cwd: string, roots: string[], denyPatter
       const all = bytes.toString('utf8');
       texts.push(all);
       const why = refusedText(all, denyPatterns);
-      if (why) warnings.push(`${path}: ${why}`);
+      if (why) warnings.push({ file: path, ...why });
       return { path, abs: full, text, ...(bytes.length > MAX_SHOWN_BYTES ? { cut: true } : {}) };
     } catch (e) {
       return { path, abs: full, problem: (e as Error).message };
     }
   });
   h.commands.forEach((line, i) => {
-    const why = refusedText(line, denyPatterns) ?? endsTheShell(line);
-    if (why) warnings.push(`${i + 1}: ${why}`);
+    const ends = endsTheShell(line);
+    const why = refusedText(line, denyPatterns) ?? (ends ? ({ kind: 'said', why: ends } as const) : null);
+    if (why) warnings.push({ ...why, line: i + 1 });
   });
   const network = texts.map((t) => networkFetchReason(t, folder)).find(Boolean) ?? null;
   const platform = texts.map((t) => platformReason(t)).find(Boolean) ?? null;

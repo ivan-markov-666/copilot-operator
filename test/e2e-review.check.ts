@@ -559,7 +559,7 @@ await scenario('a finding\'s check the runner refuses later is dropped, not the 
   const task = full((await h.run(s!.id)).tasks[0]!);
   t.check('the task is done, judged without the check', [task.status, task.stopCode ?? null], ['done', null]);
   t.check('the check is dropped', task.reviewChecks?.map((rc) => rc.state), ['dropped']);
-  t.truthy('saying the runner refuses it now', /refuses it now.*deny pattern/.test(task.reviewChecks?.[0]?.droppedBecause ?? ''), task.reviewChecks);
+  t.truthy('saying the runner refuses it now', /refuses it now.*list of refused commands/.test(task.reviewChecks?.[0]?.droppedBecause ?? ''), task.reviewChecks);
   t.truthy('it is not among the results', !(task.checkResults ?? []).some((c) => c.name.startsWith('review r1f1')), task.checkResults);
   t.truthy('and the record says so', (await events(h, s!.id)).some((e) => e.type === 'review-check-blocked'));
 });

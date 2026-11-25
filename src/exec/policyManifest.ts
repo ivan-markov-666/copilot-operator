@@ -56,6 +56,8 @@ export type PolicyManifest = {
    */
   networkFetch: string;
   denyPatterns: { count: number; digest: string };
+  /** Present when the operator's setting passed the lists over in this run (`execution.ignoreRules`). */
+  rulesIgnored?: string;
   /** The built-in floor, which no configuration can switch off. A changed digest is a changed floor. */
   builtIn: { count: number; digest: string; names: string[] };
   /** Whether an administrator's `policy.lock.json` was in force, and what it tightened. */
@@ -113,6 +115,8 @@ export type ManifestInput = {
   /** The operator's boxes for scripts, and whether the bot's are asked about first (2026-10-27). */
   scripts?: ScriptRules;
   writtenScripts?: WrittenScriptsChoice;
+  /** The lists passed over by the operator's setting (2026-11-25). */
+  rulesIgnored?: boolean;
 };
 
 /** The programs set to read only that a rule reads and, with the gate on, the list names: the ones in force. */
@@ -151,6 +155,9 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
     networkFetch: networkFetchStatement(input.mode, input.networkFetch),
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
+    ...(input.rulesIgnored
+      ? { rulesIgnored: 'BY THE OPERATOR\'S SETTING (execution.ignoreRules): the deny list but its git patterns, the allowlist and the scripts\' boxes were not applied; a lock\'s were' }
+      : {}),
     builtIn: { count: names.length, digest: digestOf(names), names },
     lock: input.lock ?? { applied: false, changes: [] },
     account: {
@@ -174,6 +181,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
     `no card for : ${m.runWithoutAsking.length ? `${m.runWithoutAsking.join(', ')} — reaching a platform with the operator's access, run without asking, changes included` : 'none — every platform command was put to the operator'}`,
     `chat files : ${m.chatFiles}`,
     `downloads   : ${m.networkFetch}`,
+    ...(m.rulesIgnored ? [`passed over : ${m.rulesIgnored}`] : []),
     `deny list   : ${m.denyPatterns.count} patterns, digest ${m.denyPatterns.digest}`,
     `built-in    : ${m.builtIn.count} refused techniques, digest ${m.builtIn.digest} (cannot be switched off)`,
     `lock        : ${

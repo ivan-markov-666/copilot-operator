@@ -48,6 +48,7 @@ import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY, MA
 import { chosenSaid } from './chosenAnswers.js';
 import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
 import { scriptsNote } from '../exec/scriptKinds.js';
+import { HANDOFF_AS_STEPS, MAX_HANDOFF_RETURNS, rulesNote } from '../config/runRules.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { confinementRefusal, isWithin, sessionRoots, type Confinement } from '../exec/confinement.js';
@@ -98,7 +99,7 @@ export const NOT_THE_CHATS: ReadonlyArray<NonNullable<Task['stopCode']>> = ['con
 /** The Settings each step is judged by: the chat is told when a save changes one under it (2026-11-03). */
 const LIVE_RULES: ReadonlySet<string> = new Set([
   'execution.allowedPrograms', 'execution.readOnlyPrograms', 'execution.runWithoutAsking', 'execution.scripts',
-  'execution.writtenScripts', 'execution.networkFetch', 'execution.denyPatterns', 'execution.isolation',
+  'execution.writtenScripts', 'execution.networkFetch', 'execution.denyPatterns', 'execution.isolation', 'execution.ignoreRules',
 ]);
 
 export type RunDeps = {
@@ -730,6 +731,8 @@ export async function openBrowser(
           : String(detail?.key ?? '').startsWith('picker:')
           ? `Not found in Copilot's model menu: the "${String(detail?.key ?? '').slice('picker:'.length)}" locator (${String(detail?.locator ?? '')}): ${String(detail?.why ?? '')}. Settings → "The model menu's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`
           : `Not found on Copilot's page: the "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "The chat's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`,
+        // Found another way (2026-11-24): nothing for the operator to do, so not a failure; said, so the log tells it.
+        'locator-worked-around': `The "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing; the bot found it another way (${String(detail?.by ?? '')}), and the work goes on.`,
         // The steps on the way to the chat (2026-11-17).
         'chat-step-not-used': `A step of yours in Settings is not taken: ${String(detail?.problem ?? '')}`,
         'chat-name-off': "The conversation is not named in Copilot's sidebar: that step is switched off in Settings → \"Steps to the chat\".",
@@ -1477,6 +1480,8 @@ export async function runTask(
   let handoffSentBack = false;
   // Handoffs sent back in a row because a line would end the operator's terminal (2026-11-03).
   let shellEndingReturns = 0;
+  /** Commands handed over that the runner can run itself, sent back once each (the rules passed over, 2026-11-25). */
+  const returnedAsSteps = new Set<string>();
   /**
    * Each handoff as it was shown and answered, kept in the run folder, so the conversation shows every revision, the
    * note it was sent back with and what the operator's own run printed (`session/story.ts`).
@@ -2072,9 +2077,13 @@ export async function runTask(
       scripts: cfg.execution.scripts,
       writtenScripts: cfg.execution.writtenScripts,
       denyPatterns: cfg.execution.denyPatterns,
+      rulesIgnored: !!cfg.execution.rulesIgnored,
       cwd: work.cwd,
       lock: cfg.policyLock,
     });
+  if (cfg.execution.rulesIgnored) {
+    sink.event('rules-ignored', { choice: cfg.execution.ignoreRules }, "Settings pass the bot's lists over in this run: refused commands (but Git's), allowed programs and scripts are not applied; downloads, the project's folders and the built-in refusals are", 'warn');
+  }
   const manifest = policyManifestNow();
   await writeFile(log.path('policy.json'), JSON.stringify(manifest, null, 2), 'utf8').catch(() => undefined);
   await record('POLICY', describePolicyManifest(manifest));
@@ -2355,7 +2364,7 @@ export async function runTask(
             `each listed in "tried". With fewer, the runner asks you for another approach instead of accepting it.`
           : undefined,
       shellNote: shellNote(shells, defaultShell),
-      scriptsNote: scriptsNote(cfg.execution.scripts, cfg.execution.writtenScripts),
+      scriptsNote: rulesNote(cfg.execution) ?? scriptsNote(cfg.execution.scripts, cfg.execution.writtenScripts),
       ...(planning && planMode !== 'off'
         ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (session.kind === 'chat' || (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm')) }
         : {}),
@@ -3409,6 +3418,23 @@ export async function runTask(
         handoffRevision = handoffSentBack ? handoffRevision + 1 : 1;
         handoffSentBack = false;
         const card = handoffCard(reply.handoff, work.cwd, confinement.roots, cfg.execution.denyPatterns, handoffRevision);
+        /*
+         * The rules passed over (2026-11-25): the runner runs these itself, so they go back to the chat as steps to send,
+         * unless something in them would still be refused. Handed over again, the same ones: the person is needed.
+         */
+        const asOne = card.commands.join('\n');
+        if (cfg.execution.rulesIgnored && !card.warnings?.length && !card.outside && !planning && !returnedAsSteps.has(asOne) && returnedAsSteps.size < MAX_HANDOFF_RETURNS) {
+          returnedAsSteps.add(asOne);
+          sink.event('handoff-as-steps', { commands: card.commands }, 'the commands handed over go back to the chat: the rules are passed over in this run, and the bot runs them itself', 'warn');
+          await record('HANDOFF SENT BACK — THE BOT RUNS IT', HANDOFF_AS_STEPS);
+          await pacer.throttleSend();
+          const before = await transport.sendAndConfirm(HANDOFF_AS_STEPS);
+          const next = await transport.waitForReply(before);
+          await saveReply(`handoff-as-steps-${returnedAsSteps.size}`, next);
+          lastMarkdown = next.markdown;
+          await pacer.settle();
+          continue;
+        }
         const why = reply.handoff.why?.trim() || 'Run these commands yourself, and send what they print.';
         let message = HANDOFF_NOBODY;
         let outcome: HandoffOutcome | null = null;

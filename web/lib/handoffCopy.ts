@@ -4,7 +4,7 @@
  * bottom, in the words it shows, and each script it keeps folded, in full. Plain functions over a translator, so the
  * card and what is copied from it read the same lines, and a check can hold them to it.
  */
-import type { HandoffCard } from './api';
+import type { HandoffCard, HandoffWarning } from './api';
 import type { Key } from './lang/types';
 
 type Translate = (key: Key, vars?: Record<string, string | number>) => string;
@@ -27,6 +27,32 @@ export function seenLines(t: Translate, card: HandoffCard): string[] {
   ];
 }
 
+const WARN: Record<Exclude<HandoffWarning['kind'], 'said'>, Key> = {
+  delete: 'ho.no.delete',
+  format: 'ho.no.format',
+  registry: 'ho.no.registry',
+  shutdown: 'ho.no.shutdown',
+  executionPolicy: 'ho.no.executionPolicy',
+  disk: 'ho.no.disk',
+  feature: 'ho.no.feature',
+  account: 'ho.no.account',
+  git: 'ho.no.git',
+  gitUnknown: 'ho.no.gitUnknown',
+  own: 'ho.no.own',
+};
+
+/** The lines and scripts the bot would refuse: where, what it does, and the line itself (2026-11-25: not the pattern). */
+export function warningLines(t: Translate, card: HandoffCard): Array<{ where: string; what: string; text?: string }> {
+  return (card.warnings ?? []).map((w) => {
+    if (typeof w === 'string') return { where: '', what: w };
+    const where = w.file ? (w.line ? t('ho.atFile', { path: w.file, n: w.line }) : w.file) : w.line ? t('ho.atLine', { n: w.line }) : '';
+    return { where, what: w.kind === 'said' ? (w.why ?? '') : t(WARN[w.kind]), ...(w.text ? { text: w.text } : {}) };
+  });
+}
+
+/** One of them on one line, as it is copied. */
+export const warningText = (w: ReturnType<typeof warningLines>[number]): string => `${w.where ? `${w.where}: ` : ''}${w.what}${w.text ? ` — ${w.text}` : ''}`;
+
 /** In a fence longer than any run of backticks in the text, so a script that prints Markdown stays whole when pasted. */
 export function fenced(text: string): string {
   const ticks = '`'.repeat(Math.max(3, ...(text.match(/`+/g) ?? []).map((run) => run.length + 1)));
@@ -42,7 +68,7 @@ export function handoffCopy(t: Translate, card: HandoffCard, why: string): strin
     why,
     [`${t('ho.folder')} ${card.cwd}`, ...(card.outside ? [t('ho.outside')] : [])].join('\n'),
     `${t('ho.commands')}\n${fenced(card.commands.join('\n'))}`,
-    (card.warnings?.length ?? 0) > 0 ? [t('ho.warn'), ...card.warnings!.map((w) => `- ${w}`)].join('\n') : '',
+    (card.warnings?.length ?? 0) > 0 ? [t('ho.warn'), ...warningLines(t, card).map((w) => `- ${warningText(w)}`)].join('\n') : '',
     `${t('ho.expect')}\n${card.expect}`,
     declaredLines(t, card).map(({ label, value }) => `${label} ${value || t('ho.notSaid')}`).join('\n'),
     seenLines(t, card).join('\n'),

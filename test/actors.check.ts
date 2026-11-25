@@ -115,7 +115,22 @@ console.log("\n--- the operator's messages stand out, and read ---");
     t.truthy(`${theme}: its text reads on the fill (≥ 4.5)`, contrast(ink, fill) >= 4.5, `${ink} on ${fill}: ${contrast(ink, fill).toFixed(2)}`);
     t.truthy(`${theme}: and so does its heading (≥ 4.5)`, contrast(soft, fill) >= 4.5, `${soft} on ${fill}: ${contrast(soft, fill).toFixed(2)}`);
     t.truthy(`${theme}: the fill stands out of the panel (≥ 3)`, contrast(fill, panel) >= 3, `${fill} on ${panel}: ${contrast(fill, panel).toFixed(2)}`);
+    /*
+     * An alert on a card is orange, not the red of an error (operator, 2026-11-24, on "Read them before you run anything:
+     * the bot itself would refuse them"), and it reads on the card and on the panel.
+     */
+    const [alert, warnSoft] = [token(b, 'alert'), token(b, 'warn-soft')];
+    const hue = (hex: string): number => {
+      const [r, g, bl] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+      const [max, min] = [Math.max(r, g, bl), Math.min(r, g, bl)];
+      return max === min ? -1 : max === r ? (((g - bl) / (max - min)) * 60 + 360) % 360 : 180;
+    };
+    t.truthy(`${theme}: an alert is orange (hue 15–45)`, !!alert && hue(alert) >= 15 && hue(alert) <= 45, alert && hue(alert));
+    t.truthy(`${theme}: and reads on a card and on the panel (≥ 4.5)`, !!alert && contrast(alert, warnSoft) >= 4.5 && contrast(alert, panel) >= 4.5, `${alert} on ${warnSoft}, ${panel}`);
   }
+  t.truthy('what a card reaches, and what the bot would refuse, are alerts', /\.reason, \.alert-text \{ color: var\(--alert\); \}/.test(css) && !/\.reason \{ color: var\(--bad\)/.test(css));
+  const handoff = readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'web', 'app', 'handoffView.tsx'), 'utf8');
+  t.check('the lines the bot would refuse are shown as an alert, not as an error', [/className="alert-text ho-warn"/.test(handoff), /className="err/.test(handoff)], [true, false]);
 }
 
 t.finish();

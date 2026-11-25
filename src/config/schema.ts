@@ -10,7 +10,7 @@ import { SCRIPT_KINDS, type ScriptKind } from '../exec/scriptKinds.js';
 import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
 import { parse as parseYaml } from 'yaml';
 import { readHandWritten } from './handWritten.js';
-import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy } from './lockedPolicy.js';
+import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy, type PolicyLock } from './lockedPolicy.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -86,6 +86,29 @@ const GIT_SOMETIMES_WRITES =
 export const GIT_WRITE_DENY = [
   `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})(?![\\w-])`,
   `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,
+];
+
+/** What a default pattern is about: what a card says of a line it refuses (2026-11-25: it showed the pattern itself). */
+export type DenyKind = 'delete' | 'format' | 'registry' | 'shutdown' | 'executionPolicy' | 'disk' | 'feature' | 'account' | 'git';
+
+/** `execution.denyPatterns` as it stands until the operator changes it, each pattern with what it is about. */
+export const DENY_DEFAULTS: ReadonlyArray<{ kind: DenyKind; pattern: string }> = [
+  { kind: 'delete', pattern: 'Remove-Item[^|]*-Recurse' },
+  { kind: 'format', pattern: '\\bformat\\s+[a-zA-Z]:' },
+  { kind: 'registry', pattern: '\\breg\\s+(add|delete)\\b' },
+  { kind: 'shutdown', pattern: 'Stop-Computer|Restart-Computer|shutdown\\b' },
+  { kind: 'executionPolicy', pattern: 'Set-ExecutionPolicy\\s+Unrestricted' },
+  { kind: 'disk', pattern: 'diskpart|bcdedit|vssadmin' },
+  { kind: 'feature', pattern: 'Disable-WindowsOptionalFeature' },
+  // An account made, or put into a group, however the line spells it. `net user bob p /add`
+  // gives the password before `/add` and is the ordinary form; the pattern that wanted
+  // `/add` straight after the name missed it, as it missed `net.exe`, `net1`, `localgroup`
+  // and the cmdlets that do the same thing.
+  { kind: 'account', pattern: '\\bnet1?(?:\\.exe)?\\s+(?:user|localgroup|group)\\b[^|;&\\n]*\\s/add\\b' },
+  { kind: 'account', pattern: '\\b(?:New-LocalUser|Add-LocalGroupMember|New-ADUser|Add-ADGroupMember)\\b' },
+  // git that changes something: see the note above GIT_GLOBAL_OPTION.
+  { kind: 'git', pattern: GIT_WRITE_DENY[0]! },
+  { kind: 'git', pattern: GIT_WRITE_DENY[1]! },
 ];
 
 /**
@@ -287,6 +310,11 @@ export const RunConfigSchema = z.object({
        */
       kerriganAsks: z.enum(['ask', 'decide', 'fail']).default('ask'),
       /**
+       * When the lists of commands and programs and the boxes of scripts are passed over (operator, 2026-11-25): `never`;
+       * `kerrigan` — in the conversations she directs; `always`. What it passes over and what it never does: `runRules.ts`.
+       */
+      ignoreRules: z.enum(['never', 'kerrigan', 'always']).default('never'),
+      /**
        * Plan mode, for every session that does not set its own (see `PlanMode` in session/model.ts): a
        * task's chat first looks at the project read-only and replies with a plan, and the work begins once
        * the plan is approved — by the runner (`auto`), or by the operator (`approve`, in a run that asks
@@ -405,26 +433,7 @@ export const RunConfigSchema = z.object({
        * text first; `run` runs it as any other step. A run that asks before every command asks about these too.
        */
       writtenScripts: z.enum(['ask', 'run']).default('ask'),
-      denyPatterns: z
-        .array(z.string())
-        .default([
-          'Remove-Item[^|]*-Recurse',
-          '\\bformat\\s+[a-zA-Z]:',
-          '\\breg\\s+(add|delete)\\b',
-          'Stop-Computer|Restart-Computer|shutdown\\b',
-          'Set-ExecutionPolicy\\s+Unrestricted',
-          'diskpart|bcdedit|vssadmin',
-          'Disable-WindowsOptionalFeature',
-          // An account made, or put into a group, however the line spells it. `net user bob p /add`
-          // gives the password before `/add` and is the ordinary form; the pattern that wanted
-          // `/add` straight after the name missed it, as it missed `net.exe`, `net1`, `localgroup`
-          // and the cmdlets that do the same thing.
-          '\\bnet1?(?:\\.exe)?\\s+(?:user|localgroup|group)\\b[^|;&\\n]*\\s/add\\b',
-          '\\b(?:New-LocalUser|Add-LocalGroupMember|New-ADUser|Add-ADGroupMember)\\b',
-          // git that changes something. See GIT_WRITE_NOTE below.
-          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})(?![\\w-])`,
-          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,
-        ]),
+      denyPatterns: z.array(z.string()).default(DENY_DEFAULTS.map((d) => d.pattern)),
     })
     .prefault({}),
 
@@ -682,6 +691,10 @@ export const RunConfigSchema = z.object({
 export type RunConfig = z.infer<typeof RunConfigSchema>;
 
 export type ResolvedConfig = RunConfig & {
+  /** A run's own settings, with the lists passed over (`runRules.ts`); never in what is saved. */
+  execution: { rulesIgnored?: boolean };
+  /** The locks themselves, for the rules a run makes for itself after this. */
+  policyLocks?: PolicyLock[];
   configPath: string;
   baseDir: string;
   /** What `policy.lock.json` tightened, or that there was none. See `lockedPolicy.ts`. */
@@ -749,6 +762,7 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
     configPath,
     baseDir,
     policyLock: outcome,
+    ...(locks.length ? { policyLocks: locks } : {}),
     resolved: {
       profileDir: expandPath(cfg.copilot.profileDir, baseDir),
       cwd: expandPath(cfg.execution.cwd, baseDir),

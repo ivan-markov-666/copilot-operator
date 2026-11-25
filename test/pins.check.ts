@@ -663,9 +663,9 @@ try {
     stop: 'button[aria-label="Stop generating"]',
     conversationLink: 'a[href*="/chat/conversation/"]',
     chatMore: 'button[data-chat-history-more-button-conversation-id="{$chat_id}"]',
-    renameItem: 'role=menuitem[name="Rename"]',
+    renameItem: '[role="menuitem"][aria-label="Rename"], [role="menuitem"]:text-is("Rename"), [role="menuitem"]:has(:text-is("Rename"))',
     renameInput: '#new-session-name',
-    renameSave: 'role=button[name="Save"]',
+    renameSave: 'button:text-is("Save"), button:has(:text-is("Save")), button[aria-label="Save"], [role="button"]:text-is("Save"), input[type="submit"][value="Save"]',
     // Until 2026-11-17 written in the code (`Upload`); the two below are pinned by what they find, in the section further down.
     uploadInput: '#upload-file-button',
     attachment: DefaultChatLocators.attachment,

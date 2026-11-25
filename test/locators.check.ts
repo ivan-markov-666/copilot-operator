@@ -133,6 +133,27 @@ console.log('\n--- "Check the locators": through the API, a window opened and cl
     const gone = await waitFor('the box failure gone', async () => ((await h.call<Failure[]>('GET', '/locators/failures')).some((x) => x.key === 'composer') ? null : true), 10_000).catch(() => false);
     t.check('found by another locator: kept; found by its own: gone', [stays, gone], [true, true]);
 
+    /*
+     * A part of the chat that worked (2026-11-24: "uploaded" stayed red for days after the page took files again): a file
+     * seen uploaded, a conversation named, a locator the bot found another way. Not a file sent unconfirmed.
+     */
+    const keysNow = async (): Promise<string[]> => (await h.call<Failure[]>('GET', '/locators/failures')).map((x) => x.key);
+    const say = (event: string, data: Record<string, unknown>) => h.ops.bus.publish({ sessionId: 'worked-check', type: `browser:${event}`, level: 'info', message: event, data });
+    for (const key of ['attachmentUploaded', 'renameSave', 'send'] as const) h.ops.recordLocatorFailure({ key, locator: DefaultChatLocators[key], why: 'for the check', stopped: false });
+    await waitFor('the three kept', async () => ((await keysNow()).filter((k) => ['attachmentUploaded', 'renameSave', 'send'].includes(k)).length === 3 ? true : null), 10_000).catch(() => undefined);
+    say('attached', { name: 'a.txt' });
+    await new Promise((r) => setTimeout(r, 700));
+    const unconfirmed = (await keysNow()).includes('attachmentUploaded');
+    say('attached', { name: 'a.txt', uploaded: true });
+    say('chat-named', { chatId: 'x', name: 'op/x/y' });
+    const left = await waitFor('the two gone', async () => {
+      const k = await keysNow();
+      return k.includes('attachmentUploaded') || k.includes('renameSave') ? null : k;
+    }, 10_000).catch(() => ['still there']);
+    t.check('a file unconfirmed takes nothing away; one uploaded and a conversation named take theirs, not Send', [unconfirmed, left.includes('send'), left.includes('still there')], [true, true, false]);
+    say('locator-worked-around', { key: 'send', locator: DefaultChatLocators.send, by: 'another way' });
+    t.check('found another way: its own goes', await waitFor('send gone', async () => ((await keysNow()).includes('send') ? null : true), 10_000).catch(() => false), true);
+
     // A step of the operator's own (2026-11-17): checked with the chat's, after them; one required not found is kept by its name.
     const settings = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
     const step = { id: 'mode', name: 'Chat mode', when: 'message', locator: '#mode-chat', action: 'click', must: true, waitSec: 2, off: false };

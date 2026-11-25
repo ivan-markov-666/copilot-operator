@@ -73,18 +73,18 @@ try {
   ];
   for (const cmd of writes) {
     const r = commandRefusal(cmd, 'pwsh', deny);
-    t.truthy(`refused as a git write: ${cmd}`, r !== null && /deny pattern/.test(r), short(r));
+    t.truthy(`refused as a git write: ${cmd}`, r !== null && /list of refused commands/.test(r), short(r));
   }
-  t.truthy('refused in a cmd step too: git.exe "push"', /deny pattern/.test(commandRefusal('git.exe "push" origin HEAD', 'cmd', deny) ?? ''), 'not refused');
+  t.truthy('refused in a cmd step too: git.exe "push"', /list of refused commands/.test(commandRefusal('git.exe "push" origin HEAD', 'cmd', deny) ?? ''), 'not refused');
   const reads = ['git.exe status', 'git -P log --oneline -5', 'git --no-optional-locks status --short', 'git "log" -1 --format=%H', 'git.exe diff HEAD~1 --stat', 'git branch --show-current', 'git log --grep="reset"'];
   for (const cmd of reads) t.check(`left open, it only reads: ${cmd}`, commandRefusal(cmd, 'pwsh', deny), null);
   // In the workbench's chat the operator's own git writes run; push and reset are still refused.
   const chat = chatDenyPatterns(deny);
   t.check('in the chat: git.exe commit runs', commandRefusal('git.exe commit -m "x"', 'pwsh', chat), null);
   t.check('in the chat: git -P switch -c topic runs', commandRefusal('git -P switch -c topic', 'pwsh', chat), null);
-  t.truthy('in the chat: git.exe push is refused', /deny pattern/.test(commandRefusal('git.exe push', 'pwsh', chat) ?? ''), 'not refused');
-  t.truthy('in the chat: git "reset" --hard is refused', /deny pattern/.test(commandRefusal('git "reset" --hard', 'pwsh', chat) ?? ''), 'not refused');
-  t.truthy('in the chat: git @a is refused', /deny pattern/.test(commandRefusal('$a=@("push"); git @a', 'pwsh', chat) ?? ''), 'not refused');
+  t.truthy('in the chat: git.exe push is refused', /list of refused commands/.test(commandRefusal('git.exe push', 'pwsh', chat) ?? ''), 'not refused');
+  t.truthy('in the chat: git "reset" --hard is refused', /list of refused commands/.test(commandRefusal('git "reset" --hard', 'pwsh', chat) ?? ''), 'not refused');
+  t.truthy('in the chat: git @a is refused', /list of refused commands/.test(commandRefusal('$a=@("push"); git @a', 'pwsh', chat) ?? ''), 'not refused');
   // A list the operator emptied of git rules is theirs: nothing here adds them back.
   t.check('a deny list with no git rule refuses no git', commandRefusal('git.exe push', 'pwsh', ['Remove-Item[^|]*-Recurse']), null);
 

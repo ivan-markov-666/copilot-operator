@@ -14,19 +14,22 @@
  * - a queue task's card answered later says the same;
  * - a line that would close the operator's terminal (2026-11-03) goes back to the chat before the card, twice at most;
  *   the scripts the lines run, in the folder they move to, are on the card, a script that stops the bot marked;
+ * - what the bot would refuse is said in words, with the line (2026-11-25), not as the pattern that matched;
  * - "Copy all" (2026-11-04) takes all a card says, from top to bottom, whatever it has and leaves out.
  *
  *   npm run check:e2e-handoff
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseReply } from '../src/protocol/parser.js';
 import { parkedAnswerFrom } from '../src/queue/queue.js';
-import { handoffResultMessage } from '../src/orchestrator/handoff.js';
-import type { PendingApproval } from '../src/session/model.js';
+import { handoffCard, handoffResultMessage } from '../src/orchestrator/handoff.js';
+import { chatDenyPatterns, DENY_DEFAULTS, RunConfigSchema } from '../src/config/schema.js';
+import type { HandoffCard, HandoffWarning, PendingApproval } from '../src/session/model.js';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
-import { handoffCopy } from '../web/lib/handoffCopy.js';
+import { handoffCopy, warningLines, warningText } from '../web/lib/handoffCopy.js';
 import { en } from '../web/lib/lang/en.js';
 import type { Key } from '../web/lib/lang/types.js';
 
@@ -51,7 +54,7 @@ const t = new Tally();
       platforms: 'Azure, read only.',
       changes: 'Only out.txt.',
       seen: { network: 'https://example.test/x', platform: 'Azure' },
-      warnings: ['Line 2 is refused.', 'Line 3 too.'],
+      warnings: ['Line 2 is refused.', { line: 3, kind: 'git', text: 'git push' }, { file: 'tools/a.ps1', kind: 'said', why: 'It stops the bot.' }],
       files: [
         { path: 'tools/a.ps1', abs: 'C:\\work\\tools\\a.ps1', text: 'Write-Output "```"', cut: true },
         { path: 'tools/gone.ps1', problem: 'It is not there.' },
@@ -65,7 +68,7 @@ const t = new Tally();
     'To read the claims.',
     `${en['ho.folder']} C:\\work\\tools\n${en['ho.outside']}`,
     `${en['ho.commands']}\n\`\`\`\npwsh -File tools/a.ps1\nGet-Content out.txt\n\`\`\``,
-    `${en['ho.warn']}\n- Line 2 is refused.\n- Line 3 too.`,
+    `${en['ho.warn']}\n- Line 2 is refused.\n- Line 3: ${en['ho.no.git']} — git push\n- tools/a.ps1: It stops the bot.`,
     `${en['ho.expect']}\nIt prints 42.`,
     `${en['ho.exit']} Exit code 0.\n${en['ho.network']} Nothing.\n${en['ho.platforms']} Azure, read only.\n${en['ho.changes']} Only out.txt.`,
     `${say('ho.seenNetwork', { what: 'https://example.test/x' })}\n${say('ho.seenPlatform', { platform: 'Azure' })}`,
@@ -81,10 +84,50 @@ const t = new Tally();
     [en['ho.exit'], en['ho.network'], en['ho.platforms'], en['ho.changes']].map((label) => `${label} ${en['ho.notSaid']}`).join('\n'),
   ]);
 }
+/*
+ * A line the deny list refuses, in words (operator, 2026-11-25): the card showed the pattern itself, "matches deny pattern
+ * /\\bgit\\s+(?:…" — a regular expression nobody reads. Where it is, what it does, and the line.
+ */
+{
+  console.log('\n--- what the bot would refuse, in words ---');
+  const dir = mkdtempSync(join(tmpdir(), 'cop-handoff-words-'));
+  try {
+    const say = (key: Key, vars: Record<string, string | number> = {}): string => Object.entries(vars).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), en[key] as string);
+    const defaults = RunConfigSchema.parse({}).execution.denyPatterns;
+    const card = (commands: string[], deny = defaults, files: string[] = []): HandoffCard =>
+      handoffCard({ commands, expect: 'Seen.', files } as unknown as Parameters<typeof handoffCard>[0], dir, [dir], deny);
+    const of = (line: string, deny = defaults) => card([line], deny).warnings?.[0] as HandoffWarning | undefined;
+    const cases: Array<[string, string]> = [
+      ['Remove-Item .\\out -Recurse -Force', 'delete'], ['format d:', 'format'], ['reg add HKCU\\Software\\X', 'registry'], ['Restart-Computer', 'shutdown'],
+      ['Set-ExecutionPolicy Unrestricted', 'executionPolicy'], ['diskpart', 'disk'], ['Disable-WindowsOptionalFeature -FeatureName X', 'feature'],
+      ['net user bob p /add', 'account'], ['New-LocalUser bob', 'account'], ['git push origin main', 'git'], ['git branch -D x', 'git'],
+      ['git.exe push', 'git'], ['git "push"', 'git'], ['git --no-optional-locks push', 'git'],
+    ];
+    for (const [line, kind] of cases) t.check(`in words: ${line}`, of(line), { kind, line: 1, text: line });
+    t.check('git known only when it runs', of('$a = @("push"); git @a'), { kind: 'gitUnknown', line: 1, text: '$a = @("push"); git @a' });
+    t.check("in a chat, whose git is the operator's, push is still said so", of('git push', chatDenyPatterns(defaults))?.kind, 'git');
+    t.check("a pattern of the operator's own: the list", of('deploy-now --prod', ['deploy-\\w+']), { kind: 'own', line: 1, text: 'deploy-now --prod' });
+    t.check('one that is not a regular expression', of('run tool([x now', ['tool([x']), { kind: 'own', line: 1, text: 'run tool([x now' });
+    t.check("an older default, kept in the operator's settings, says what its line does", of('git push', ['git\\s+push'])?.kind, 'git');
+    t.check('a default with no kind of its own is none', defaults, DENY_DEFAULTS.map((d) => d.pattern));
+    writeFileSync(join(dir, 'a.ps1'), "Write-Output 'x'\r\n\r\n  git --no-optional-locks push origin main\r\n");
+    writeFileSync(join(dir, 'b.ps1'), "Write-Output 'x'\nRemove-Item .\\out -Recurse\n");
+    const scripts = card(['Write-Output hi'], defaults, ['a.ps1', 'b.ps1']);
+    t.check('in a script: the script, its line, and the line itself', scripts.warnings, [
+      { file: 'a.ps1', kind: 'git', line: 3, text: 'git --no-optional-locks push origin main' },
+      { file: 'b.ps1', kind: 'delete', line: 2, text: 'Remove-Item .\\out -Recurse' },
+    ]);
+    const shown = warningLines(say, scripts).map(warningText);
+    t.check('as the card says it', shown[0], `a.ps1, line 3: ${en['ho.no.git']} — git --no-optional-locks push origin main`);
+    t.truthy('and no pattern is in it', cases.every(([line]) => !/deny pattern|\\b|\(\?:/.test(warningLines(say, card([line])).map((w) => w.what).join(' '))));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 type Card = {
   id: string;
   actor?: string;
-  question?: { text: string; options: string[]; handoff?: { revision?: number; commands: string[]; cwd: string; expect: string; files: Array<{ path: string; abs?: string; text?: string; problem?: string }>; warnings?: string[]; seen?: { network?: string } } };
+  question?: { text: string; options: string[]; handoff?: { revision?: number; commands: string[]; cwd: string; expect: string; files: Array<{ path: string; abs?: string; text?: string; problem?: string }>; warnings?: HandoffWarning[]; seen?: { network?: string } } };
 };
 
 async function scenario(title: string, settings: Record<string, unknown>, body: (h: Harness) => Promise<void>): Promise<void> {
@@ -187,7 +230,7 @@ await scenario('Settings agree with what the bot proposes: commands handed over 
   await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   const card = await waitFor('the commands handed over', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question?.handoff), 60_000);
   t.check('it waits, Settings agreeing or not', !!card, true);
-  t.truthy('the line the bot would refuse is marked on the card', (card.question?.handoff?.warnings ?? []).some((w) => w.startsWith('1:')), card.question?.handoff?.warnings);
+  t.truthy('the line the bot would refuse is marked on the card', (card.question?.handoff?.warnings ?? []).some((w) => w.line === 1 && !w.file && !!w.why), card.question?.handoff?.warnings);
   await h.call('POST', `/approvals/${card.id}/answer`, { text: 'not on this machine', ran: false });
   await h.idle();
   t.truthy('the chat is told it was not run, with the word given', told.includes('will not run the commands') && told.includes('They say: not on this machine'), told.slice(0, 400));
@@ -273,10 +316,10 @@ await scenario('a line that would close the operator\'s terminal goes back to th
   t.check('the script the line runs in the folder it moves to is on the card, read in full, though the chat named none', [ho.files.map((f) => f.path), ho.files[0]?.text], [['rules-engine/switch-env.ps1'], SWITCH_SCRIPT]);
   t.truthy(
     'and it is marked: it stops every node process, the bot with them',
-    (ho.warnings ?? []).some((w) => w.startsWith('rules-engine/switch-env.ps1:') && w.includes('every process named node') && w.includes('stops the bot too')),
+    (ho.warnings ?? []).some((w) => w.file === 'rules-engine/switch-env.ps1' && !!w.why?.includes('every process named node') && w.why.includes('stops the bot too')),
     ho.warnings,
   );
-  t.truthy('no line is marked for closing the terminal', !(ho.warnings ?? []).some((w) => w.includes('closes the PowerShell')), ho.warnings);
+  t.truthy('no line is marked for closing the terminal', !(ho.warnings ?? []).some((w) => w.why?.includes('closes the PowerShell')), ho.warnings);
   await h.call('POST', `/approvals/${card.id}/answer`, { text: 'switched to qa\nSWITCH_EXIT=0' });
   await h.idle();
   t.truthy('what it printed reached the chat', told.includes('SWITCH_EXIT=0'), told.slice(0, 400));
@@ -303,7 +346,7 @@ await scenario('a chat that keeps writing exit: sent back twice, then the card s
   const card = await waitFor('the commands handed over', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question?.handoff), 60_000);
   const ho = card.question!.handoff!;
   t.check('the third time, the card shows the line as the chat wrote it', ho.commands, [ending]);
-  t.truthy('marked: line 1 closes the terminal it is typed in', (ho.warnings ?? []).includes('1: "exit" closes the PowerShell it is typed in'), ho.warnings);
+  t.truthy('marked: line 1 closes the terminal it is typed in', (ho.warnings ?? []).some((w) => w.line === 1 && w.why === '"exit" closes the PowerShell it is typed in'), ho.warnings);
   await h.call('POST', `/approvals/${card.id}/answer`, { text: 'not with exit in it', ran: false });
   await h.idle();
   t.truthy('the operator\'s word reached the chat', told.includes('They say: not with exit in it'), told.slice(0, 400));

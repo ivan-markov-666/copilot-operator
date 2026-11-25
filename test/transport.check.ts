@@ -1256,17 +1256,65 @@ try {
 
     // The rename dialog's Save not found by its locator, in a dialog that takes Enter: named all the same.
     const ENTER = "d.querySelector('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') d.querySelector('[data-count=Save]').click(); }); document.body.appendChild(d);";
-    const r = await fixture('rename-enter', SIDEBAR(true, 'escape').replace('document.body.appendChild(d);', ENTER) + FAR, { chatLocators: { renameSave: '#no-such-save' } });
+    // Two buttons the bot cannot tell the Save from ("Keep it", "Try later"), so it presses neither.
+    const ODD = (html: string): string => html.replace('<button data-count="Save">Save</button>', '<button data-count="Save">Keep it</button> <button data-count="Later">Try later</button>');
+    const r = await fixture('rename-enter', ODD(SIDEBAR(true, 'escape')).replace('document.body.appendChild(d);', ENTER) + FAR, { chatLocators: { renameSave: '#no-such-save' } });
     t.check('Save not found: the name given with Enter, and taken', await r.transport.nameChat('ID-42', 'op/x/enter'), 'op/x/enter');
-    const rs = named(r.events, 'locator-missing').map((e) => (e.detail ?? {}) as Record<string, unknown>);
-    const rp = typeof rs[0]?.piece === 'string' ? await readFile(String(rs[0].piece), 'utf8') : '';
-    t.check("said as the Save locator, not stopping the work; its piece the dialog as it was open, its own button in it", [rs.map((x) => [x.key, x.stopped]), rp.includes('new-session-name'), rp.includes('data-count="Save"'), rp.includes('an old message')], [[['renameSave', false]], true, true, false]);
+    t.check('named: not said as a failure (2026-11-24), only that it was found another way', [named(r.events, 'locator-missing').length, named(r.events, 'locator-worked-around').map((e) => [e.detail?.key, e.detail?.by])], [0, [['renameSave', 'Enter in the name field']]]);
     t.check('the sidebar shows the name, and no dialog is left', [await r.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), await r.page.locator('#new-session-name').count()], ['op/x/enter', 0]);
 
     // A dialog that takes no Enter either: not named, and closed, not left over the chat.
-    const n = await fixture('rename-no-enter', SIDEBAR(true, 'escape') + FAR, { chatLocators: { renameSave: '#no-such-save' } });
+    const n = await fixture('rename-no-enter', ODD(SIDEBAR(true, 'escape')) + FAR, { chatLocators: { renameSave: '#no-such-save' } });
     t.check('Save not found and no Enter taken: not named', await n.transport.nameChat('ID-42', 'op/x/none'), false);
+    const rs = named(n.events, 'locator-missing').map((e) => (e.detail ?? {}) as Record<string, unknown>);
+    const rp = typeof rs[0]?.piece === 'string' ? await readFile(String(rs[0].piece), 'utf8') : '';
+    t.check("said as the Save locator, not stopping the work; its piece the dialog as it was open, its own button in it", [rs.map((x) => [x.key, x.stopped]), rp.includes('new-session-name'), rp.includes('data-count="Save"'), rp.includes('an old message')], [[['renameSave', false]], true, true, false]);
+    t.check('neither of the two was pressed', [(await clicks(n.page))['Save'] ?? 0, (await clicks(n.page))['Later'] ?? 0], [0, 0]);
     t.check('the dialog closed, the name unchanged, the failure said', [await n.page.locator('#new-session-name').count(), await n.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), named(n.events, 'chat-name-failed').length], [0, 'old', 1]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('the rename whatever its buttons are like: the defaults, and one replaced in Settings that finds nothing any more', async () => {
+    /*
+     * Operator, 2026-11-24: "there are new locators; today I had to change the Save of the rename window again". The
+     * defaults were Playwright's `role=`, which finds nothing while a part of the page around it is aria-hidden; the one
+     * the chatbot gave instead (`button[type="button"][aria-busy="false"]:text-is("Save")`) finds nothing once the text
+     * is in a span of its own, or the button carries no aria-busy. Each is named here without a word to the operator.
+     */
+    type Case = [string, (html: string) => string, Record<string, string>];
+    const save = (b: string) => (html: string): string => html.replace('<button data-count="Save">Save</button>', b);
+    const MINE = 'button[type="button"][aria-busy="false"]:text-is("Save")';
+    const cases: Case[] = [
+      ['aria-hidden around the dialog and the menu', (h) => h.replace("d.setAttribute('role', 'dialog');", "d.setAttribute('role', 'dialog'); d.setAttribute('aria-hidden', 'true');").replace("menu.setAttribute('role', 'menu');", "menu.setAttribute('role', 'menu'); menu.setAttribute('aria-hidden', 'true');"), {}],
+      ['a label that says more', save('<button data-count="Save" aria-label="Save chat name">Save</button>'), {}],
+      ["the operator's own, the text in a span now", save('<button type="button" aria-busy="false" data-count="Save"><span>Save</span></button>'), { renameSave: MINE }],
+      ["the operator's own, no aria-busy now", save('<button type="submit" data-count="Save">Save</button>'), { renameSave: MINE }],
+      ['a Save called something else, the one button that is not Cancel', save('<button data-count="Save">Apply</button> <button aria-label="Close">x</button>'), { renameSave: MINE }],
+      ["the menu's Rename replaced by one that finds nothing", (h) => h, { renameItem: '#no-such-rename' }],
+      ['the field replaced by one that finds nothing', (h) => h.replace('id="new-session-name"', 'id="another-id" type="text"'), {}],
+    ];
+    for (const [i, [what, change, chatLocators]] of cases.entries()) {
+      const f = await fixture(`rename-like-${i}`, change(SIDEBAR(true, 'escape')), { chatLocators });
+      const got = await f.transport.nameChat('ID-42', `op/x/like-${i}`);
+      const c = await clicks(f.page);
+      t.check(`${what}: named, nothing said as a failure, Save pressed once`, [got, await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), named(f.events, 'locator-missing').length, c['Save'] ?? 0, c['Cancel'] ?? 0], [`op/x/like-${i}`, `op/x/like-${i}`, 0, 1, 0]);
+    }
+
+    // Another "Save" on the page before the dialog: the dialog's own is pressed.
+    const two = await fixture('rename-two-saves', `<button data-count="Other">Save</button>${SIDEBAR(true, 'escape')}`);
+    t.check("another Save on the page: the dialog's is pressed, not it", [await two.transport.nameChat('ID-42', 'op/x/two'), (await clicks(two.page))['Other'] ?? 0], ['op/x/two', 0]);
+
+    // Save disabled for a moment while it saves: no refusal, the name whole.
+    const SLOW = "d.querySelector('[data-count=\"Save\"]').addEventListener('click', (e) => { const b = e.currentTarget; if (b.disabled) return; e.stopImmediatePropagation(); b.disabled = true; setTimeout(() => { target.setAttribute('aria-label', d.querySelector('input').value); target.textContent = d.querySelector('input').value; d.remove(); }, 900); }, true); document.body.appendChild(d);";
+    const slow = await fixture('rename-saving', SIDEBAR(true, 'escape').replace('document.body.appendChild(d);', SLOW));
+    t.check('Save disabled while it saves: the name taken whole, no refusal', [await slow.transport.nameChat('ID-42', 'op/x/a-name-taken-slowly'), named(slow.events, 'chat-name-refused').length], ['op/x/a-name-taken-slowly', 0]);
+
+    // The name taken and the dialog left standing, saying nothing (live test 2026-11-25): named, no shorter form, the dialog closed.
+    const STAYS = "d.querySelector('[data-count=\"Save\"]').addEventListener('click', (e) => { e.stopImmediatePropagation(); const n = d.querySelector('input').value; setTimeout(() => { target.setAttribute('aria-label', n); target.textContent = n; }, 600); }, true); document.body.appendChild(d);";
+    const stays = await fixture('rename-stays', SIDEBAR(true, 'escape').replace('document.body.appendChild(d);', STAYS));
+    const startedStays = Date.now();
+    t.check('a dialog that stays open with the name in the sidebar: named, whole, no refusal, the dialog closed', [await stays.transport.nameChat('ID-42', 'op/x/a-dialog-that-stays'), named(stays.events, 'chat-name-refused').length, await stays.page.locator('#new-session-name').count(), await stays.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label')], ['op/x/a-dialog-that-stays', 0, 0, 'op/x/a-dialog-that-stays']);
+    t.truthy('and at once, not after ten seconds', Date.now() - startedStays < 8_000, Date.now() - startedStays);
   });
 
   // -------------------------------------------------------------------------------------------
@@ -1299,6 +1347,25 @@ try {
     await a.transport.attach([file]);
     t.check('the new card: attached, nothing said missing', [named(a.events, 'attached').map((e) => e.detail?.name), named(a.events, 'locator-missing').length, named(a.events, 'attachment-upload-unconfirmed').length], [['message-01-in-full.txt'], 0, 0]);
     t.truthy('and only once its spinner had gone', (await a.page.evaluate(() => document.getElementById('spin') === null)) && Date.now() - startedA >= 1_200, Date.now() - startedA);
+
+    // The chip of the work page (2026-11-20): `data-composer-chip` with a "Remove <name>" button, outside any wrapper known.
+    const CHIP =
+      "wrap.insertAdjacentHTML('afterbegin', '<div data-composer-chip=\"u-1\"><span>a file</span><div role=\"progressbar\" id=\"spin\"></div><button aria-label=\"Remove ' + f.name + '\">x</button></div>'); setTimeout(() => document.getElementById('spin').remove(), 1200);";
+    const chip = await fixture('attach-chip', `${WRAP}${INPUT}</div>${onPick(CHIP)}`);
+    shorten(chip.transport, { uploadWaitMs: 8_000 });
+    const startedChip = Date.now();
+    await chip.transport.attach([file]);
+    t.check('the chip with "Remove <name>": attached and uploaded, nothing said', [named(chip.events, 'attached').map((e) => [e.detail?.name, e.detail?.uploaded]), named(chip.events, 'locator-missing').length], [[['message-01-in-full.txt', true]], 0]);
+    t.truthy('once its progress had gone', Date.now() - startedChip >= 1_200, Date.now() - startedChip);
+
+    // "Uploaded" replaced in Settings by one that finds nothing: by the default, held longer, not the two minutes.
+    const own = await fixture('attach-own-stale', `${WRAP}${INPUT}</div>${onPick(`${NEW_CARD} setTimeout(() => document.getElementById('spin').remove(), 300);`)}`, { chatLocators: { attachmentUploaded: '[data-gone="{$file_name}"]' } });
+    shorten(own.transport, { uploadWaitMs: 20_000 });
+    Object.assign(own.transport as unknown as { uploadDefaultHoldMs: number }, { uploadDefaultHoldMs: 2_500 });
+    const startedOwn = Date.now();
+    await own.transport.attach([file]);
+    t.check('"uploaded" of Settings finds nothing: by the default, said only in the log', [named(own.events, 'attached').map((e) => e.detail?.uploaded), named(own.events, 'locator-missing').length, named(own.events, 'locator-worked-around').map((e) => e.detail?.key)], [[true], 0, ['attachmentUploaded']]);
+    t.truthy('after its hold, not the whole wait', Date.now() - startedOwn >= 2_500 && Date.now() - startedOwn < 12_000, Date.now() - startedOwn);
 
     // The old chip: the name in its label, its id SPO_… once uploaded.
     const OLD_CHIP =
@@ -1373,6 +1440,28 @@ try {
     t.check('refused every time: three tries, then the bar closed and given up', [await value<number>(h.page, 'tries'), await value<number>(h.page, 'dismissed'), named(h.events, 'attachment-upload-refused').length, named(h.events, 'locator-missing').length], [3, 1, 4, 0]);
     t.truthy("the message carries the file's text, said as not attached", sentH.startsWith('The full output is in the attached file') && sentH.includes("refused the file message-01-in-full.txt") && sentH.includes('the whole message'), sentH);
     t.truthy('and went without the two minutes', Date.now() - startedH < 15_000, Date.now() - startedH);
+
+    /*
+     * Live test 2026-11-25 (and 11-23): the bar over the first file of a window says "Uploading from device will send a
+     * copy to OneDrive (work/school). Manage uploads" — a notice, and the file uploads under it. It was taken for a
+     * refusal: fifteen seconds, and the file's text in the message as if it had been refused. With "Manage uploads" a
+     * link, and a button; and one that offers nothing with the file never uploaded goes in the text, as a refusal.
+     */
+    for (const [what, manage] of [['link', '<a href="#">Manage uploads</a>'], ['button', '<button type="button" class="manage" onclick="window.managed = 1">Manage uploads</button>']] as const) {
+      const NOTICE =
+        `const b = document.createElement('div'); b.setAttribute('role', 'alert'); b.innerHTML = '<span>Uploading from device will send a copy to OneDrive (work/school).</span>${manage.replace(/'/g, "\\'")}<button type="button" aria-label="Dismiss upload message" class="dismiss">x</button>'; ` +
+        "wrap.parentNode.insertBefore(b, wrap); setTimeout(() => document.getElementById('spin')?.remove(), 900);";
+      const n = await fixture(`attach-notice-${what}`, `<div>${WRAP}${INPUT}</div></div>${onPick(`${NEW_CARD} ${NOTICE}`)}`);
+      shorten(n.transport, { uploadWaitMs: 20_000 });
+      const startedN = Date.now();
+      t.check(`a notice over an upload that goes through ("Manage uploads" a ${what}): uploaded, no refusal, nothing of it pressed`, [await n.transport.attach([file]), named(n.events, 'attachment-upload-refused').length, named(n.events, 'attachment-upload-notice').length, named(n.events, 'attached').map((e) => e.detail?.uploaded), await value<number>(n.page, 'managed')], [[], 0, 1, [true], undefined]);
+      t.truthy('and without the wait of a refusal', Date.now() - startedN < 10_000, Date.now() - startedN);
+    }
+    const NEVER = "const b = document.createElement('div'); b.setAttribute('role', 'alert'); b.innerHTML = '<span>This file cannot be uploaded.</span><button type=\"button\" aria-label=\"Dismiss upload message\" class=\"dismiss\">x</button>'; wrap.parentNode.insertBefore(b, wrap);";
+    const never = await fixture('attach-offers-nothing', `<div>${WRAP}${INPUT}</div></div>${onPick(`${NEW_CARD} ${NEVER}`)}`);
+    shorten(never.transport, { uploadWaitMs: 20_000 });
+    (never.transport as unknown as { uploadNoticeMs: number }).uploadNoticeMs = 1_500;
+    t.check('a bar that offers nothing, and the file never uploaded: refused once, its text goes in the message', [(await never.transport.attach([file])).length, named(never.events, 'attachment-upload-refused').length], [1, 1]);
   });
 
   // -------------------------------------------------------------------------------------------

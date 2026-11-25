@@ -1804,16 +1804,13 @@ Current URL: ${url}`);
       opened = true;
 
       step = 'renameItem';
-      const item = this.el('renameItem').first();
-      await item.waitFor({ state: 'visible', timeout: 5_000 });
+      const item = await this.renamePart('renameItem', 5_000);
       await this.press(item);
       opened = false;
 
       step = 'renameInput';
-      const input = this.el('renameInput').first();
-      await input.waitFor({ state: 'visible', timeout: 10_000 });
+      const input = await this.renamePart('renameInput', 10_000);
       step = 'renameSave';
-      const save = this.el('renameSave').first();
       /*
        * Offered in shorter forms until the dialog takes one. Copilot refuses a name it counts as longer than 50
        * characters, by a count that is not always ours, and its dialog then stays open over the chat (2026-10-17: "the
@@ -1822,22 +1819,30 @@ Current URL: ${url}`);
        */
       let wanted: string | null = null;
       const refused: string[] = [];
+      // What the sidebar calls it: its row's label is the chat's name.
+      const shows = async (): Promise<string> => ((await row.getAttribute('aria-label', { timeout: 1_000 }).catch(() => null)) ?? '').trim();
       for (const form of chatNameForms(name)) {
         await input.fill(form);
+        const save = await this.renameSaveOf(input);
         /*
          * Its Save not found (work, 2026-11-18: role=button[name="Save"] found nothing, and the dialog was left open
-         * over the chat): said, with the dialog's HTML while it is still open, and the name given with Enter, which
-         * such a field takes. Once only: a dialog that takes no Enter is closed with Cancel below.
+         * over the chat): the name given with Enter, which such a field takes. Once only: a dialog that takes no Enter is
+         * said, with its HTML while it is still open, and closed with Cancel below. A name taken is not said as a
+         * failure (2026-11-24): there is nothing for the operator to do.
          */
-        if (!(await save.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false))) {
-          await this.warnLocator('renameSave', `while the conversation was being named "${name}"`, chatId).catch(() => undefined);
+        if (!save) {
           await input.press('Enter').catch(() => undefined);
-          if (await this.renameTaken(input, save)) wanted = form;
-          else refused.push(form);
+          if (await this.renameTaken(input, null, async () => (await shows()) === form)) {
+            wanted = form;
+            this.emit('locator-worked-around', { key: 'renameSave', locator: this.chatLocators.renameSave, by: 'Enter in the name field' });
+          } else {
+            await this.warnLocator('renameSave', `while the conversation was being named "${name}"`, chatId).catch(() => undefined);
+            refused.push(form);
+          }
           break;
         }
         await this.press(save);
-        if (await this.renameTaken(input, save)) {
+        if (await this.renameTaken(input, save, async () => (await shows()) === form)) {
           wanted = form;
           break;
         }
@@ -1853,8 +1858,16 @@ Current URL: ${url}`);
         return false;
       }
 
-      // Named only when the sidebar says so: its row's label is the chat's name.
-      const shows = async (): Promise<string> => ((await row.getAttribute('aria-label').catch(() => null)) ?? '').trim();
+      // Taken, and its dialog still open (2026-11-25): closed, so it is not left over the chat.
+      if (await input.isVisible().catch(() => false)) {
+        const cancel = this.p.getByRole('button', { name: Rename.cancelText, exact: true }).first();
+        await cancel.click({ timeout: 1_500 }).catch(() => undefined);
+        await input.waitFor({ state: 'detached', timeout: 1_500 }).catch(async () => {
+          await this.p.keyboard.press('Escape').catch(() => undefined);
+        });
+      }
+
+      // Named only when the sidebar says so.
       const deadline = Date.now() + 8_000;
       while ((await shows()) !== wanted && Date.now() < deadline) await this.p.waitForTimeout(250);
       if ((await shows()) !== wanted) {
@@ -1879,20 +1892,97 @@ Current URL: ${url}`);
   }
 
   /**
+   * A part of the rename — the menu's "Rename", the dialog's field — once it shows: by its locator in force, else by the
+   * bot's own ways to it (operator, 2026-11-24: "I had to change it again today"): the default, for one replaced in
+   * Settings on a page that changed once more, then what it is on the page. The other ways are taken only when the
+   * locator in force finds nothing that shows for `waitMs`, and said in the log (`locator-worked-around`).
+   */
+  private async renamePart(key: 'renameItem' | 'renameInput', waitMs: number): Promise<Locator> {
+    const set = this.el(key).filter({ visible: true }).first();
+    const problem = await set.waitFor({ state: 'visible', timeout: waitMs }).then(() => null, (e: unknown) => e as Error);
+    if (!problem) return set;
+    const ways =
+      key === 'renameItem'
+        ? [DefaultChatLocators.renameItem, '[role="menu"] :text-is("Rename")']
+        : [DefaultChatLocators.renameInput, '[role="dialog"] input[type="text"], [role="dialog"] input:not([type]), [role="dialog"] [role="textbox"]'];
+    for (const way of ways) {
+      if (way === this.chatLocators[key]) continue;
+      const found = this.p.locator(playwrightSelector(way)).filter({ visible: true }).first();
+      if ((await found.count().catch(() => 0)) === 0) continue;
+      this.emit('locator-worked-around', { key, locator: this.chatLocators[key], by: way });
+      return found;
+    }
+    throw problem;
+  }
+
+  /**
+   * The rename dialog's Save, or null. The one in the same dialog as the field, by its locator in force; else by the
+   * default; else the dialog's one button that is neither Cancel nor a close. Only then one elsewhere on the page that
+   * the locator in force finds (a dialog the bot does not know as one).
+   */
+  private async renameSaveOf(input: Locator): Promise<Locator | null> {
+    const box = input.locator('xpath=ancestor::*[@role="dialog" or @role="alertdialog" or self::dialog or self::form][last()]');
+    const boxed = (await box.count().catch(() => 0)) > 0;
+    const set = this.el('renameSave').filter({ visible: true });
+    const inBox = (l: Locator): Locator => l.and(box.locator('*')).first();
+    const first = boxed ? inBox(set) : set.first();
+    if (await first.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) return first;
+    if (!boxed) return null;
+    const around = (by: string): void => this.emit('locator-worked-around', { key: 'renameSave', locator: this.chatLocators.renameSave, by });
+    const byDefault = inBox(this.p.locator(playwrightSelector(DefaultChatLocators.renameSave)).filter({ visible: true }));
+    if (this.chatLocators.renameSave !== DefaultChatLocators.renameSave && (await byDefault.count().catch(() => 0)) > 0) {
+      around(DefaultChatLocators.renameSave);
+      return byDefault;
+    }
+    const buttons = box.locator('button, [role="button"], input[type="submit"]').filter({ visible: true });
+    const others: number[] = [];
+    const n = await buttons.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const says = await buttons
+        .nth(i)
+        .evaluate((el) => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('value'), el.textContent].map((x) => (x ?? '').trim()).filter(Boolean))
+        .catch(() => [] as string[]);
+      // Cancel, a close button whatever it is called, and one with no words at all (an icon) are not the Save.
+      if (says.length === 0 || says.some((x) => /^(cancel|close|dismiss|clear|delete|back|help|info)\b|^[x×✕✖]$/i.test(x))) continue;
+      others.push(i);
+    }
+    if (others.length === 1) {
+      around("the dialog's one button that is not Cancel");
+      return buttons.nth(others[0]!);
+    }
+    return (await set.count().catch(() => 0)) > 0 ? set.first() : null;
+  }
+
+  /**
    * Whether the rename dialog took the name it was given: it closes. A refusal it shows — the input marked invalid,
    * an alert in the dialog, the Save button disabled — ends the wait at once; one it does not show, after ten seconds.
+   * A Save disabled while it is saving (aria-busy, or for less than a second and a half) is no refusal. Nor is a dialog
+   * that stays open with the conversation already under that name in the sidebar (`named`): live on 2026-11-25 one said
+   * nothing and stood for ten seconds, a shorter form and Cancel after it, and the name asked for was there.
    */
-  private async renameTaken(input: Locator, save: Locator): Promise<boolean> {
+  private async renameTaken(input: Locator, save: Locator | null, named: () => Promise<boolean>): Promise<boolean> {
     const deadline = Date.now() + 10_000;
+    let disabledSince: number | null = null;
     while (Date.now() < deadline) {
       if ((await input.count().catch(() => 0)) === 0 || !(await input.isVisible().catch(() => false))) return true;
+      if (await named()) return true;
       const shown = await input
         .evaluate((el) => {
           const box = el.closest('[role="dialog"]') ?? el.parentElement;
           return el.getAttribute('aria-invalid') === 'true' || !!box?.querySelector('[role="alert"]');
         })
         .catch(() => false);
-      if (shown || (await save.isDisabled().catch(() => false))) return false;
+      if (shown) return false;
+      const off =
+        save !== null &&
+        (await save
+          .evaluate((el) => ((el as unknown as { disabled?: boolean }).disabled === true || el.getAttribute('aria-disabled') === 'true') && el.getAttribute('aria-busy') !== 'true', undefined, { timeout: 500 })
+          .catch(() => false));
+      if (!off) disabledSince = null;
+      else {
+        disabledSince ??= Date.now();
+        if (Date.now() - disabledSince >= 1_500) return false;
+      }
       await this.p.waitForTimeout(250);
     }
     return false;
@@ -3119,7 +3209,7 @@ Current URL: ${url}`);
           await this.locatorMissing('attachmentUploaded', `for ${Math.round(this.uploadWaitMs / 1000)} s after the file ${name} was attached`, { stopped: false, file: path }).catch(() => undefined);
         }
       }
-      this.emit('attached', { name });
+      this.emit('attached', { name, ...(uploaded ? { uploaded: true } : {}) });
     }
     return refused;
   }
@@ -3131,14 +3221,29 @@ Current URL: ${url}`);
    * the same command again). A refusal is answered with the bar's own "Try again", up to `uploadRetriesMs.length`
    * times, waiting longer each time so as not to press a busy service; still refused, 'refused'. True once uploaded;
    * false when neither showed (the `attachmentUploaded` locator likely found nothing).
+   *
+   * A bar is a refusal when it offers to try again. One that does not is a notice ("Uploading from device will send a
+   * copy to OneDrive … Manage uploads", with the first file of a window: live test 2026-11-25, and 11-23 before it) —
+   * taken for a refusal, it cost the wait and the file went in the text, uploaded as it was. The upload is waited for
+   * under it; not seen by `uploadNoticeMs`, it is taken for a refusal that offers nothing.
    */
   private async uploadOrRefusal(path: string): Promise<boolean | 'refused'> {
     const name = path.split(/[\\/]/).pop() as string;
-    const bar = (): Locator => this.el('uploadError').filter({ visible: true }).first();
+    const anyBar = (): Locator => this.el('uploadError').filter({ visible: true });
+    // A locator of the operator's own is taken at its word: whatever it finds is a refusal.
+    const bar = (): Locator =>
+      this.chatLocators.uploadError !== DefaultChatLocators.uploadError
+        ? anyBar().first()
+        : anyBar().filter({ has: this.p.locator('button:not([aria-label])') }).filter({ hasNotText: /manage uploads/i }).first();
+    const own = this.chatLocators.attachmentUploaded !== DefaultChatLocators.attachmentUploaded;
+    const byDefault = this.p.locator(playwrightSelector(fillFileLocator(DefaultChatLocators.attachmentUploaded, path)));
     for (let attempt = 0; ; attempt++) {
       const until = Date.now() + this.uploadWaitMs;
       let since: number | null = null;
+      let sinceDefault: number | null = null;
       let refusal: string | null = null;
+      let noticeSince: number | null = null;
+      let offersNothing = false;
       while (Date.now() < until) {
         if (this.p.isClosed()) return false;
         if ((await bar().count().catch(() => 0)) > 0) {
@@ -3149,14 +3254,37 @@ Current URL: ${url}`);
           since ??= Date.now();
           if (Date.now() - since >= 2_000) return true;
         } else since = null;
+        if (since === null && (await anyBar().count().catch(() => 0)) > 0) {
+          if (noticeSince === null) {
+            const said = (await anyBar().first().innerText({ timeout: 1_000 }).catch(() => '')).replace(/\s+/g, ' ').trim();
+            this.emit('attachment-upload-notice', { name, said: said.slice(0, 300) });
+          }
+          noticeSince ??= Date.now();
+          if (Date.now() - noticeSince >= this.uploadNoticeMs) {
+            refusal = ((await anyBar().first().innerText({ timeout: 1_000 }).catch(() => '')) || 'the upload was refused').replace(/\s+/g, ' ').trim();
+            offersNothing = true;
+            break;
+          }
+        }
+        /*
+         * One set in Settings that finds nothing (work, 2026-11-20: two minutes on every message with a file): by the
+         * default, held much longer — the operator replaced it, so it is trusted less.
+         */
+        if (since === null && own && (await byDefault.count().catch(() => 0)) > 0) {
+          sinceDefault ??= Date.now();
+          if (Date.now() - sinceDefault >= this.uploadDefaultHoldMs) {
+            this.emit('locator-worked-around', { key: 'attachmentUploaded', locator: this.chatLocators.attachmentUploaded, by: DefaultChatLocators.attachmentUploaded });
+            return true;
+          }
+        } else sinceDefault = null;
         await this.p.waitForTimeout(500);
       }
       if (refusal === null) return false;
-      const wait = this.uploadRetriesMs[attempt];
+      const wait = offersNothing ? undefined : this.uploadRetriesMs[attempt];
       this.emit('attachment-upload-refused', { name, said: refusal.slice(0, 300), attempt: attempt + 1, ...(wait !== undefined ? { retryInSec: Math.round(wait / 1000) } : {}) });
       if (wait === undefined) {
         // Given up: the bar is closed, so it does not stand over the message that goes without the file.
-        await bar().locator('button[aria-label]').first().click({ timeout: 2_000 }).catch(() => undefined);
+        await (offersNothing ? anyBar().first() : bar()).locator('button[aria-label]').first().click({ timeout: 2_000 }).catch(() => undefined);
         return 'refused';
       }
       // A Stop ends the wait: no more tries, and the message goes as it would after the last one.
@@ -3204,6 +3332,10 @@ Current URL: ${url}`);
   inputWaitMs = 10_000;
   attachWaitMs = 30_000;
   uploadWaitMs = 120_000;
+  /** How long the default must say "uploaded" where the one set in Settings finds nothing (a field, for the checks). */
+  uploadDefaultHoldMs = 15_000;
+  /** How long a bar that offers no "Try again" may stand with the file not seen uploaded (a field, for the checks). */
+  uploadNoticeMs = 30_000;
   /** The waits before each "Try again" of an upload Copilot refused; one more refusal after the last, and it goes in the text. */
   uploadRetriesMs = [15_000, 30_000, 60_000];
   /** How long Copilot's own chat page may show no box before its locator is said as the likely cause (a field, for the checks). */

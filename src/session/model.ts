@@ -541,6 +541,18 @@ export type TaskNote = { id: string; text: string; at: string; sentAt?: string; 
 export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
 
 /** The operator's answer to it, given later; `resume` for what needs only the operator to be there again. */
+/** Per line or script, why the runner would refuse it: what it does (`kind`) and the words, or a reason in full (`why`). */
+export type HandoffWarning = {
+  /** The script, as the card shows it; without one, a line of the card's own. */
+  file?: string;
+  /** The line: of the card's, or of the script. */
+  line?: number;
+  kind: 'delete' | 'format' | 'registry' | 'shutdown' | 'executionPolicy' | 'disk' | 'feature' | 'account' | 'git' | 'gitUnknown' | 'own' | 'said';
+  /** The line itself, as it is written. */
+  text?: string;
+  why?: string;
+};
+
 /**
  * Commands the chat handed to the operator to run themselves (2026-10-26; revise and resubmit 2026-10-27): what they
  * are for, the lines, the folder, what should be seen and how it should end, what the chat says they reach and change,
@@ -567,8 +579,8 @@ export type HandoffCard = {
   seen?: { network?: string; platform?: string };
   /** The folder is outside the project. */
   outside?: boolean;
-  /** By line or by script, the reason the runner would refuse it. */
-  warnings?: string[];
+  /** By line or by script, the reason the runner would refuse it; a string on cards from before 2026-11-25. */
+  warnings?: Array<HandoffWarning | string>;
 };
 
 /** The operator's answer to a handoff: ran it and sends what it printed; sends it back for a correction; will not run it. */
