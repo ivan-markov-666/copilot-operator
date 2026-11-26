@@ -176,15 +176,24 @@ export function setProcessTableQueryForChecks(query?: TableQuery): void {
  * The processes created since `since`, or null when the list could not be read — its query timed out or failed, twice
  * (third hunt, 2026-11-20: read as an empty list, a server the task left running was never stopped nor named; a second
  * try with more time is what a machine busy for a moment needs).
+ *
+ * An answer with no process in it is not read either: the query's own PowerShell was created after `since`, so a list
+ * read whole always has a row. Empty or not JSON, it said nothing (2026-11-25: once in a full run of the checks a
+ * server a step left was neither stopped nor named, the list taken for "nothing").
  */
 export async function readProcessTable(since: number): Promise<ProcessRow[] | null> {
   const from = dmtfOf(since - SLACK_MS);
   const script =
     `Get-CimInstance Win32_Process -Filter "CreationDate >= '${from}'" | Select-Object ProcessId, ParentProcessId, Name, CommandLine, ` +
     "@{n='Created';e={ if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 } }} | ConvertTo-Json -Compress";
-  const text = (await tableQuery(script, 20_000)) ?? (await tableQuery(script, 45_000));
-  if (text === null) return null;
-  return parseJsonList<{ ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null; Created: number }>(text)
+  type Row = { ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null; Created: number };
+  const read = async (timeoutMs: number): Promise<Row[] | null> => {
+    const rows = parseJsonList<Row>(await tableQuery(script, timeoutMs)).filter((p) => p !== null && typeof p === 'object' && typeof p.ProcessId === 'number');
+    return rows.length > 0 ? rows : null;
+  };
+  const rows = (await read(20_000)) ?? (await read(45_000));
+  if (rows === null) return null;
+  return rows
     .map((p) => ({
       pid: p.ProcessId,
       parent: p.ParentProcessId,
@@ -342,7 +351,7 @@ export async function findLeftovers(
   tracker?: ProcessTracker,
 ): Promise<{ ours: Leftover[]; notOurs: Leftover[]; unread?: string }> {
   const read = await readProcessTable(before.since);
-  if (read === null) return { ours: [], notOurs: [], unread: 'the list of processes could not be read (Get-CimInstance Win32_Process timed out or failed, twice)' };
+  if (read === null) return { ours: [], notOurs: [], unread: 'the list of processes could not be read (Get-CimInstance Win32_Process timed out, failed or answered nothing, twice)' };
   const now = read;
   // A process is "the same" only if its id *and* its creation time match: an id alone is reused.
   const known = new Set(before.processes.map((p) => `${p.pid}@${p.created}`));

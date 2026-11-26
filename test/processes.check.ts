@@ -28,6 +28,9 @@ import { join } from 'node:path';
 
 import {
   ProcessTracker,
+  readProcessTable,
+  reapLeftovers as reap,
+  setProcessTableQueryForChecks,
   descendantsOf,
   describeLeftovers,
   isAlive,
@@ -65,6 +68,34 @@ console.log('--- whose process it is, from the table alone ---');
   check("the operator's process in the same folder is not ours", ours.includes(400), false);
   const live = descendantsOf([row(1, 0, 0), row(100, 1, 10_100), row(101, 100, 11_000)], [{ pid: 100, from: 10_000 }]);
   check('a step still running is ours with what is under it', live.map((r) => r.pid), [100, 101]);
+}
+
+console.log('\n--- an answer with no process in it is not "nothing running" ---');
+{
+  /*
+   * 2026-11-25, once in a full run of the checks: the list came back with nothing in it, and the server a step had left
+   * was neither stopped nor named. The query's own PowerShell is always in a list read whole, so an empty one, or one
+   * that is not JSON, said nothing: asked again, then said as not read.
+   */
+  const ROW = JSON.stringify([{ ProcessId: 7, ParentProcessId: 1, Name: 'powershell.exe', CommandLine: 'x', Created: 0 }]);
+  const answers = (...said: (string | null)[]): { calls: () => number } => {
+    let n = 0;
+    setProcessTableQueryForChecks(async () => said[Math.min(n++, said.length - 1)] ?? null);
+    return { calls: () => n };
+  };
+  try {
+    for (const [what, said] of [['empty', ''], ['an empty list', '[]'], ['not JSON', 'Get-CimInstance : Quota violation'], ['JSON of nothing', 'null'], ['rows of nothing', '[null, 1]']] as const) {
+      const q = answers(said);
+      check(`${what}, twice: not read, asked twice`, [await readProcessTable(Date.now()), q.calls()], [null, 2]);
+    }
+    const q = answers('', ROW);
+    check('empty once, then read: the rows of the second', [(await readProcessTable(Date.now()))?.map((r) => r.pid), q.calls()], [[7], 2]);
+    answers('[]');
+    const reaped = await reap('C:\\proj', { since: Date.now(), processes: [], listeners: [] });
+    check('and what is left running is said as not read', [reaped.killed.length, typeof reaped.unread], [0, 'string']);
+  } finally {
+    setProcessTableQueryForChecks();
+  }
 }
 
 if (process.platform !== 'win32') {
@@ -139,6 +170,15 @@ try {
   check('the log says how it was stopped', /asked to close, then forced/.test(hung.stderr), true);
   console.log(`      (handler ran: ${ended(HUNG) !== null})`);
 } finally {
+  // A run that went wrong leaves its servers running, and the next run fails on their ports: stopped here, only the
+  // processes of this run's folder (2026-11-25).
+  await new Promise<void>((done) => {
+    const ps = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${dir.replace(/'/g, "''")}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+      { stdio: 'ignore', windowsHide: true });
+    ps.on('close', () => done());
+    ps.on('error', () => done());
+  });
   await wait(300);
   await rm(dir, { recursive: true, force: true }).catch(() => undefined);
 }
